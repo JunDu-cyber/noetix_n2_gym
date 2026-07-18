@@ -212,7 +212,7 @@ class N2_18DofCfg(LeggedRobotCfg):
         # 网格类型（平面或三角网格）
         mesh_type = 'trimesh' # plane trimesh
         # 是否启用课程学习
-        curriculum = True
+        curriculum = False
         
         # 仅用于复杂地形:
         # 是否测量高度

@@ -32,10 +32,12 @@ def play(args):
     # env_cfg.env.num_envs = min(env_cfg.env.num_envs, 1)  # 限制环境数量为1
     env_cfg.env.num_envs = 1  # 设置环境数量为1
     env_cfg.sim.physx.max_gpu_contact_pairs = 2**10  # 设置GPU接触对的最大数量
-    env_cfg.terrain.mesh_type = 'plane'  # 设置地形类型为平面
-    env_cfg.terrain.num_rows = 20  # 设置地形行数
-    env_cfg.terrain.num_cols = 10  # 设置地形列数
-    env_cfg.terrain.curriculum = False  # 关闭课程学习
+    env_cfg.terrain.mesh_type = 'trimesh'  # 设置地形类型为
+    env_cfg.terrain.num_rows = 4  # 设置地形行数
+    env_cfg.terrain.num_cols = 4  # 设置地形列数
+    env_cfg.terrain.curriculum = True  # 课程学习
+    env_cfg.terrain.max_init_terrain_level = 3
+    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
     env_cfg.noise.add_noise = False  # 关闭噪声添加
     env_cfg.domain_rand.randomize_gains = False  # 关闭增益随机化
     env_cfg.domain_rand.randomize_motor_strength = False  # 关闭电机强度随机化

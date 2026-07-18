@@ -164,6 +164,18 @@
       </body>
     </body>
 
+      <geom type="plane" size="0 0 1" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.05" pos="1.125 0 0.05" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.1" pos="1.375 0 0.1" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.15000000000000002" pos="1.625 0 0.15000000000000002" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.2" pos="1.875 0 0.2" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.25" pos="2.125 0 0.25" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.30000000000000004" pos="2.375 0 0.30000000000000004" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.35000000000000003" pos="2.625 0 0.35000000000000003" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.4" pos="2.875 0 0.4" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.45" pos="3.125 0 0.45" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="0.125 1.0 0.5" pos="3.375 0 0.5" friction="0.6 0.005 0.0001"/>
+      <geom type="box" size="1.0 1.0 0.5" pos="4.5 0 0.5"/>
   </worldbody>
 
   <actuator>
