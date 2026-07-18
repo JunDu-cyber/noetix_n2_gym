@@ -22,7 +22,7 @@ action_scale: 0.25
 cmd_scale: [2.0, 2.0, 1.0]
 num_actions: 18
 num_single_obs: 63
-frame_stack: 5
-num_obs: 315 # num_single_obs * frame_stack
+frame_stack: 1
+num_obs: 63 # num_single_obs * frame_stack
 
 cmd_init: [0, 0, 0]

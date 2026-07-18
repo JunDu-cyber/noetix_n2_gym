@@ -173,7 +173,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config_file", type=str, default="n2_10dof.yaml", help="config file name in the config folder")
+    parser.add_argument("--config_file", type=str, default="n2_18dof.yaml", help="config file name in the config folder")
     args = parser.parse_args()
     config_file = args.config_file
     with open(f"{LEGGED_GYM_ROOT_DIR}/sim2sim/configs/{config_file}", "r") as f:
