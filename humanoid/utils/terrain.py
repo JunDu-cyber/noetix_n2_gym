@@ -61,6 +61,8 @@ class Terrain:
 
         self.width_per_env_pixels = int(self.env_width / cfg.horizontal_scale)
         self.length_per_env_pixels = int(self.env_length / cfg.horizontal_scale)
+        self.vertical_scale = cfg.vertical_scale
+        self.horizontal_scale = cfg.horizontal_scale
 
         self.border = int(cfg.border_size/self.cfg.horizontal_scale)
         self.tot_cols = int(cfg.num_cols * self.width_per_env_pixels) + 2 * self.border
@@ -215,7 +217,7 @@ class HumanoidTerrain(Terrain):
                                 length=self.width_per_env_pixels,
                                 vertical_scale=self.cfg.vertical_scale,
                                 horizontal_scale=self.cfg.horizontal_scale)
-        discrete_obstacles_height = difficulty * 0.10 
+        discrete_obstacles_height = difficulty * 0.20
         r_height = difficulty * 0.07 # 0.07
         h_slope = difficulty * 0.15 # 0.15
         if choice < self.proportions[0]:

@@ -57,10 +57,12 @@ Thumbs.db
 # VS Code
 .vscode
 .history
+.claude
 # logs
 logs
 runs
 videos
+docs
 # resources
 
 # other
