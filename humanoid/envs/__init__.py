@@ -7,10 +7,12 @@ from .n2.n2_env import N2Env
 from .n2.n2_config import N2_18DofCfg, N2_18DofCfgPPO
 from .n2.n2_10dof_env import N2_10dof_Env
 from .n2.n2_10dof_config import N2_10dof_Cfg, N2_10dof_CfgPPO
-
+from .n2.n2_perceptive_env import N2PerceptiveEnv
+from .n2.n2_perceptive_config import N2PerceptiveCfg, N2PerceptiveCfgPPO
 
 task_registry.register( "n2", N2Env, N2_18DofCfg(), N2_18DofCfgPPO() )
 task_registry.register( "n2_10dof", N2_10dof_Env, N2_10dof_Cfg(), N2_10dof_CfgPPO() )
+task_registry.register('n2_perceptive', N2PerceptiveEnv, N2PerceptiveCfg(), N2PerceptiveCfgPPO())
 
 # ---------------------------------------------- Mimic ----------------------------------------------
 from .n2.n2_mimic_env import N2MimicEnv
