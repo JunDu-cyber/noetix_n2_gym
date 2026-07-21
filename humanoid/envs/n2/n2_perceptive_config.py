@@ -35,7 +35,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         foot_n_y = 2  # samples along width  → n = 6 per foot
 
         class scales(N2_10dof_Cfg.rewards.scales):
-            foothold = -0.15  # sign lives here; reward fn returns +count
+            foothold = 0.  # sign lives here; reward fn returns +count
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):

@@ -103,10 +103,13 @@ class N2PerceptiveEnv(N2_10dof_Env):
         # terrain height under every sample
         terr = self._terrain_height_at(world[..., :2].reshape(-1, 2)).reshape(E, F, S)
 
-        # d_ij : how far terrain sits below the foot sole. > ε  ==  over a void
-        foot_z = self.feet_pos[..., 2].unsqueeze(-1)  # (E, F, 1)
-        depth = foot_z - terr  # (E, F, S)
-        bad = (depth > self.cfg.rewards.foothold_depth_tol).float()  # 1{d_ij<ε}
+        # 参考面 = 该脚自身采样点里最高的地形 = 它实际踩着的石块 / 横梁表面。
+        # 用【相对高度】而非 feet_pos.z:feet_pos.z 是 ankle 关节原点, 远高于脚底(~脚厚),
+
+        # 平地站立时 foot_z - terr 恒 > ε,会把每个触地脚都判为+悬空 → 逼出单腿跳。
+        ref = terr.max(dim=-1, keepdim=True).values  # (E, F, 1) 支撑面
+        # d_ij : 采样点地形比支撑面低多少;> ε 表示该点悬在石块+之外(空洞上方)
+        bad = ((ref - terr) > self.cfg.rewards.foothold_depth_tol).float()  # 1{...}
 
         # C_i * Σ_j 1{...}, summed over feet.  Sign comes from the config scale.
         Ci = self.contacts.float()  # (E, F)
