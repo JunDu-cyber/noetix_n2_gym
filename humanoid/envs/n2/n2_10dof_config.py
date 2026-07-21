@@ -265,7 +265,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             # 能耗奖励
             dof_acc = -2.5e-7
             energy_cost = -1e-3
-            action_smoothness = -1e-3
+            action_smoothness = -3e-3
             
             # 其他奖励
             collision = 0.0

@@ -38,7 +38,8 @@ class LeggedRobot(BaseTask):
         self.cfg = cfg
         self.sim_params = sim_params
         self.height_samples = None
-        self.debug_viz = False
+        # 从配置读取(默认 False),否则 terrain.debug_viz=True 不会生效
+        self.debug_viz = getattr(cfg.terrain, 'debug_viz', False)
         self.init_done = False
         self._parse_cfg()
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
@@ -178,6 +179,10 @@ class LeggedRobot(BaseTask):
         self.feet_air_time[env_ids] = 0.
         self.feet_contact_time[env_ids] = 0.
         self.feet_both_contact_time[env_ids] = 0.
+        # clear frame-stack history so a new episode does not inherit the previous episode's frames
+        if self.cfg.env.frame_stack is not None:
+            for i in range(len(self.obs_history)):
+                self.obs_history[i][env_ids] = 0.
         self.episode_length_buf[env_ids] = 0
         self.reset_buf[env_ids] = 1
 
