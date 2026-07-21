@@ -1,5 +1,6 @@
 # 
 policy_path: "{LEGGED_GYM_ROOT_DIR}/sim2sim/policy/policy.pt"
+#policy_path: "/home/jun/Downloads/policy (1).pt"
 xml_path: "{LEGGED_GYM_ROOT_DIR}/resources/robots/N2/mjcf/n2_18dof.xml"
 
 # Total simulation time

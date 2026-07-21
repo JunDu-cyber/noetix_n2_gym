@@ -58,7 +58,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         num_envs = 4096
 
         # 单次观测维度（注释掉的是帧堆叠相关配置）
-        # frame_stack = 5
+        frame_stack = 10
         """
         num_single_obs = 63 #39
         num_privileged_obs = 221 #77 + 96 
@@ -67,8 +67,8 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         num_privileged_obs = 77 + 96 
 
         # 观测空间维度（注释掉的是帧堆叠版本）
-        # num_observations = int(frame_stack * num_single_obs)
-        num_observations = num_single_obs
+        num_observations = int(frame_stack * num_single_obs)
+        # num_observations = num_single_obs
         
         # 动作空间维度（18个自由度，注释中显示之前是10）
         #num_actions = 18 #10
@@ -198,9 +198,9 @@ class N2_10dof_Cfg(LeggedRobotCfg):
     class terrain(LeggedRobotCfg.terrain):
         """地形配置"""
         # 网格类型（平面或三角网格）
-        mesh_type = 'plane' # plane trimesh
+        mesh_type = 'trimesh' # plane trimesh
         # 是否启用课程学习
-        curriculum = False
+        curriculum = True
         
         # 仅用于复杂地形:
         # 是否测量高度
@@ -223,9 +223,9 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         # 地形列数（类型）
         num_cols = 10  
         # 初始地形等级
-        max_init_terrain_level = 0 #10  
+        max_init_terrain_level = 2 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
-        terrain_proportions = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        terrain_proportions = [0.1, 0.0, 0.1, 0.05, 0.05, 0.4, 0.3]
         # 恢复系数
         restitution = 0.
     
@@ -243,7 +243,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         class scales:
             """奖励缩放因子"""
             # 速度跟踪奖励
-            tracking_lin_vel = 1.2
+            tracking_lin_vel = 1.4
             tracking_ang_vel = 1.0
             
             
@@ -265,7 +265,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             # 能耗奖励
             dof_acc = -2.5e-7
             energy_cost = -1e-3
-            action_smoothness = -0.01
+            action_smoothness = -1e-3
             
             # 其他奖励
             collision = 0.0
