@@ -300,7 +300,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         # 命令重新采样时间间隔[s]
         resampling_time = [5, 15] 
         # 是否启用航向命令模式（如果为True，则从航向误差计算角速度命令）
-        heading_command = False 
+        heading_command = True
         # 最小命令速度
         min_cmd_vel = 0.2
         
