@@ -15,10 +15,10 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         curriculum = True
 
         # 初始地形等级
-        max_init_terrain_level = 2 # 10
+        max_init_terrain_level = 0 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
-        terrain_proportions = [0.6, 0.0, 0.4, 0.0, 0.0, 0., 0.]
-        # terrain_proportions = [0.1, 0.0, 0.1, 0.05, 0.05, 0.4, 0.3]
+        # terrain_proportions = [0.8, 0.0, 0.2, 0.0, 0.0, 0., 0.]
+        terrain_proportions = [0.2, 0.0, 0.2, 0.05, 0.05, 0.4, 0.1]
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
