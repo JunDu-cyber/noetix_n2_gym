@@ -30,9 +30,12 @@ frame_stack: 10
 num_obs: 1350 # num_single_obs * frame_stack
 
 # Height-scan obs term: clip(base_z - base_height_offset - terrain_height, -height_clip, height_clip) * height_measurements_scale
-# matches normalization.obs_scales.height_measurements / the "- 0.5" / clip(-1,1) in compute_observations
+# matches normalization.obs_scales.height_measurements / clip(-1,1) in compute_observations.
+# base_height_offset = rewards.base_height_target (0.698m) -- NOT a hardcoded 0.5. Standing
+# on flat ground at the target height must land near 0, not carry a constant +~1.0 bias after
+# scaling (see N2PerceptiveEnv.compute_observations fix).
 height_measurements_scale: 5.0
-base_height_offset: 0.5
+base_height_offset: 0.698
 height_clip: 1.0
 
 # Height sample grid in the base frame (x outer, y inner -> 12*8=96), copied
