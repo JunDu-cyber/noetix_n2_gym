@@ -16,8 +16,11 @@ class N2PerceptiveEnv(N2_10dof_Env):
         ), dim=-1)
 
         # ---- 地形高度图    num_single_obs = 39 + 96 = 135 ----
+        # 参考基准用 base_height_target(0.698m) 而不是硬编码 0.5:平地正常站立时
+        # root_z≈base_height_target,这样 heights 才能在 0 附近居中,而不是带一个
+        # ~+1.0(经 height_measurements=5 放大后)的固定偏置。
         heights = torch.clip(
-            self.root_states[:, 2].unsqueeze(1) - 0.5 - self.measured_heights,
+            self.root_states[:, 2].unsqueeze(1) - self.cfg.rewards.base_height_target - self.measured_heights,
             -1, 1.) * self.obs_scales.height_measurements
         obs_buf = torch.cat((obs_buf, heights), dim=-1)        # (N, num_single_obs)
 

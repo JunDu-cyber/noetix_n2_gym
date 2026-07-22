@@ -52,3 +52,6 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):
     class runner(N2_10dof_CfgPPO.runner):
         experiment_name = 'n2_perceptive'
+        # 高度图(96维,占每帧135维的71%)缩放后典型幅度比其余本体感知维度大很多,
+        # 基类默认不做观测归一化(Identity),这里为 perceptive 单独打开经验归一化
+        empirical_normalization = True
