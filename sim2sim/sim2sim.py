@@ -118,7 +118,7 @@ def run_mujoco(cfg):
 
     # Per-actuator effort limits read from the yaml (matches Isaac torque
     # clipping at legged_robot.py:468). Absent -> no clipping.
-    tau_limit = np.array(config["tau_limit"], dtype=np.float32) if "tau_limit" in config else None
+    # tau_limit = np.array(config["tau_limit"], dtype=np.float32) if "tau_limit" in config else None
 
     for _ in tqdm(range(int(simulation_duration / simulation_dt)), desc="Simulating..."):
 
@@ -162,8 +162,8 @@ def run_mujoco(cfg):
         # Generate PD control
         tau = pd_control(target_q, q, kps,
                         target_dq, dq, kds)  # Calc torques
-        if tau_limit is not None:
-            tau = np.clip(tau, -tau_limit, tau_limit)  # match Isaac effort-limit clipping
+        # if tau_limit is not None:
+        #     tau = np.clip(tau, -tau_limit, tau_limit)  # match Isaac effort-limit clipping
         data.ctrl = tau
 
         mujoco.mj_step(model, data)
