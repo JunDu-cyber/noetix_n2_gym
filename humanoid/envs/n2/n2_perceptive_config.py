@@ -37,6 +37,16 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = 0.  # sign lives here; reward fn returns +count
 
+            # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
+            # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
+            # terrain 配置（均未覆盖此值，直接沿用 -1.0 用于实际训练）
+            collision = -1.0
+            # stumble: 对应 _reward_stumble（注意 key 必须是 stumble，不是
+            # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
+            # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
+            # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
+            stumble = -1.0
+
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):
     class runner(N2_10dof_CfgPPO.runner):
