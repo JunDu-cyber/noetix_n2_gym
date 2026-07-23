@@ -217,6 +217,7 @@ class HumanoidTerrain(Terrain):
                                 length=self.width_per_env_pixels,
                                 vertical_scale=self.cfg.vertical_scale,
                                 horizontal_scale=self.cfg.horizontal_scale)
+        step_width = np.random.uniform(0.3, 0.45)
         discrete_obstacles_height = difficulty * 0.20
         r_height = difficulty * 0.07 # 0.07
         h_slope = difficulty * 0.15 # 0.15
@@ -238,10 +239,16 @@ class HumanoidTerrain(Terrain):
             terrain_utils.pyramid_sloped_terrain(terrain, slope=-h_slope, platform_size=0.1)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[5]:
-            terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.4, step_height=discrete_obstacles_height, platform_size=1.)
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height, platform_size=1.)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[6]:
-            terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.4, step_height=-discrete_obstacles_height, platform_size=1.)
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height, platform_size=1.)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[7]:
+            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[8]:
+            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         else:
             pass
