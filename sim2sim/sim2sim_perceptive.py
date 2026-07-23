@@ -57,17 +57,45 @@ def init_height_points(measured_points_x, measured_points_y):
     grid_x, grid_y = np.meshgrid(measured_points_x, measured_points_y, indexing='ij')
     return np.stack([grid_x.flatten(), grid_y.flatten()], axis=-1)  # (S, 2)
 
-def terrain_height_at(points_xy):
-    '''Terrain height lookup at arbitrary world (x, y) points.
+def terrain_height_at(model, data, points_xy, ray_start_z=10.0, max_body_skips=4):
+    '''Terrain height at arbitrary world (x, y) points via a downward raycast.
 
-    The MuJoCo scenes wired up for sim2sim (N2_10dof.xml) are flat-plane
-    only, so this mirrors the training-time mesh_type == 'plane' branch and
-    returns zeros. Swap in a real heightfield/raycast sample here if a
-    terrain scene is added.
+    The MuJoCo scenes wired up for sim2sim (e.g. N2_10dof.xml) are NOT
+    flat-plane only -- they include a real staircase built from stacked box
+    geoms. The previous version of this function assumed flat-plane and
+    always returned 0, silently feeding a flat height-map into both the
+    debug markers and the actual policy observation (get_height_scan) even
+    while standing on stairs.
+
+    A geom directly under a sample point may belong to the robot itself
+    (e.g. a sample point that lands under a foot), not the terrain. Isaac
+    Gym's height scan only ever sees the static terrain mesh, so mj_ray hits
+    on a non-worldbody (bodyid != 0) geom are skipped: re-cast from just
+    below that hit, up to max_body_skips times, until a worldbody geom
+    (the actual terrain) is found.
     '''
-    return np.zeros(points_xy.shape[0], dtype=np.double)
+    n = points_xy.shape[0]
+    heights = np.zeros(n, dtype=np.double)
+    geomid = np.zeros(1, dtype=np.int32)
+    for i in range(n):
+        x, y = points_xy[i]
+        pnt = np.array([x, y, ray_start_z], dtype=np.float64)
+        vec = np.array([0., 0., -1.], dtype=np.float64)
+        bodyexclude = -1
+        z_hit = 0.0
+        for _ in range(max_body_skips):
+            dist = mujoco.mj_ray(model, data, pnt, vec, None, 1, bodyexclude, geomid)
+            if dist < 0 or geomid[0] < 0:
+                break
+            z_hit = pnt[2] - dist
+            if model.geom_bodyid[geomid[0]] == 0:  # worldbody geom == terrain
+                break
+            bodyexclude = int(model.geom_bodyid[geomid[0]])
+            pnt = np.array([x, y, z_hit - 1e-4], dtype=np.float64)
+        heights[i] = z_hit
+    return heights
 
-def get_height_scan(base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale):
+def get_height_scan(model, data, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale):
     '''Yaw-rotates + translates the base-frame height_points grid into world
     space, samples terrain height under each point, and returns the scaled
     relative-height observation. Mirrors N2PerceptiveEnv.compute_observations()
@@ -77,11 +105,11 @@ def get_height_scan(base_xyz, quat, height_points, base_height_offset, height_cl
     cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
     world_x = base_xyz[0] + height_points[:, 0] * cos_yaw - height_points[:, 1] * sin_yaw
     world_y = base_xyz[1] + height_points[:, 0] * sin_yaw + height_points[:, 1] * cos_yaw
-    terrain_h = terrain_height_at(np.stack([world_x, world_y], axis=-1))
+    terrain_h = terrain_height_at(model, data, np.stack([world_x, world_y], axis=-1))
     heights = np.clip(base_xyz[2] - base_height_offset - terrain_h, -height_clip, height_clip)
     return heights * height_measurements_scale
 
-def get_height_points_world(base_xyz, quat, height_points):
+def get_height_points_world(model, data, base_xyz, quat, height_points):
     '''World-space (x, y, z) of every height-scan sample point, z = the
     sampled terrain height under it. Same yaw-rotation as get_height_scan,
     kept separate since debug markers want raw terrain height (not the
@@ -90,7 +118,7 @@ def get_height_points_world(base_xyz, quat, height_points):
     cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
     world_x = base_xyz[0] + height_points[:, 0] * cos_yaw - height_points[:, 1] * sin_yaw
     world_y = base_xyz[1] + height_points[:, 0] * sin_yaw + height_points[:, 1] * cos_yaw
-    world_z = terrain_height_at(np.stack([world_x, world_y], axis=-1))
+    world_z = terrain_height_at(model, data, np.stack([world_x, world_y], axis=-1))
     return np.stack([world_x, world_y, world_z], axis=-1)  # (S, 3)
 
 def run_mujoco(cfg):
@@ -196,9 +224,9 @@ def run_mujoco(cfg):
             obs[0, 9 + num_actions:9 + num_actions * 2] = dq * dof_vel_scale
             obs[0, 9 + num_actions * 2:9 + num_actions * 3] = action
             obs[0, 9 + num_actions * 3:] = get_height_scan(
-                base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale)
+                model, data, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale)
             if debug_viz:
-                height_marker_world[:] = get_height_points_world(base_xyz, quat, height_points)
+                height_marker_world[:] = get_height_points_world(model, data, base_xyz, quat, height_points)
 
             hist_obs.append(obs)
             hist_obs.popleft()
