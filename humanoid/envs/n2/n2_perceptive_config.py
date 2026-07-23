@@ -18,7 +18,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         max_init_terrain_level = 0 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.1, 0., 0.25, 0.25]
+        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
@@ -46,8 +46,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 的 world-frame progress reward）。转向绕开障碍后继续走"前方"在
             # tracking_lin_vel/ang_vel（机体系）里满分，但在这里因为世界系方向没变
             # 而会掉分甚至为负（后退）——首轮训练后需要根据 TensorBoard 重新调整量级
-            world_progress = 1.0
-            world_heading = 0.5
+            world_progress = 8.0
+            world_heading = 5
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
@@ -57,7 +57,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
             # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
             # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
-            stumble = -1.0
+            stumble = -1.5
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):
