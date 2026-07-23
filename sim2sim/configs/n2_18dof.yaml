@@ -29,3 +29,11 @@ frame_stack: 10
 num_obs: 630 # num_single_obs * frame_stack
 
 cmd_init: [0, 0, 0]
+
+# Training (task "n2", n2_config.py) uses commands.heading_command=True:
+# commands[:,2] is recomputed every step as
+# clip(0.5*wrap_to_pi(heading_target - current_heading), -1, 1), not held at
+# a fixed rate. sim2sim replicates this closed loop when true; command.cmd[2]
+# (Insert/Delete keys) becomes the requested heading delta (rad) from the
+# robot's spawn heading, not a raw yaw-rate command.
+heading_command: true
