@@ -225,8 +225,8 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         # 初始地形等级
         max_init_terrain_level = 0 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
-        # terrain_proportions = [0.8, 0.0, 0.2, 0.0, 0.0, 0., 0.]
-        terrain_proportions = [0.2, 0.0, 0.2, 0.05, 0.05, 0.4, 0.1]
+        terrain_proportions = [0.6, 0.0, 0.4, 0.0, 0.0, 0., 0.]
+        # terrain_proportions = [0.2, 0.0, 0.2, 0.05, 0.05, 0.4, 0.1]
         # 恢复系数
         restitution = 0.
     
@@ -245,7 +245,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             """奖励缩放因子"""
             # 速度跟踪奖励
             tracking_lin_vel = 1.4
-            tracking_ang_vel = 1.0
+            tracking_ang_vel = 1.2
             
             
             # 基础姿态奖励
@@ -269,7 +269,8 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             action_smoothness = -3e-3
             
             # 其他奖励
-            collision = 0.0
+            collision = -1.0
+            # stumble = -1.0
             dof_pos_limits = -5.0
 
     class noise:

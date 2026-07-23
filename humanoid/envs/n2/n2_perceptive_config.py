@@ -17,8 +17,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 初始地形等级
         max_init_terrain_level = 0 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
-        # terrain_proportions = [0.8, 0.0, 0.2, 0.0, 0.0, 0., 0.]
-        terrain_proportions = [0.2, 0.0, 0.2, 0.05, 0.05, 0.4, 0.1]
+        # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
+        terrain_proportions = [0.1, 0.0, 0.1, 0.05, 0.05, 0.4, 0.3]
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
@@ -37,6 +37,9 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = -0.15  # sign lives here; reward fn returns +count
+
+            tracking_lin_vel = 1.4
+            tracking_ang_vel = 1.6
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
