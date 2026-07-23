@@ -44,3 +44,7 @@ measured_points_x: [-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4, 0.5,
 measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 
 cmd_init: [0, 0, 0]
+
+# Draw the height-scan grid (yellow spheres) in the MuJoCo viewer, matching
+# terrain.debug_viz in Isaac Gym (legged_robot._draw_debug_vis).
+debug_viz: true

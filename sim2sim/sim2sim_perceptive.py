@@ -81,6 +81,18 @@ def get_height_scan(base_xyz, quat, height_points, base_height_offset, height_cl
     heights = np.clip(base_xyz[2] - base_height_offset - terrain_h, -height_clip, height_clip)
     return heights * height_measurements_scale
 
+def get_height_points_world(base_xyz, quat, height_points):
+    '''World-space (x, y, z) of every height-scan sample point, z = the
+    sampled terrain height under it. Same yaw-rotation as get_height_scan,
+    kept separate since debug markers want raw terrain height (not the
+    base-relative/clipped/scaled obs value). Mirrors legged_robot._draw_debug_vis.'''
+    yaw = 2. * math.atan2(quat[2], quat[3])
+    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+    world_x = base_xyz[0] + height_points[:, 0] * cos_yaw - height_points[:, 1] * sin_yaw
+    world_y = base_xyz[1] + height_points[:, 0] * sin_yaw + height_points[:, 1] * cos_yaw
+    world_z = terrain_height_at(np.stack([world_x, world_y], axis=-1))
+    return np.stack([world_x, world_y, world_z], axis=-1)  # (S, 3)
+
 def run_mujoco(cfg):
     """
     Run the Mujoco simulation using the provided policy and configuration.
@@ -124,6 +136,10 @@ def run_mujoco(cfg):
         measured_points_x = config["measured_points_x"]
         measured_points_y = config["measured_points_y"]
 
+        # Draw the height-scan grid as yellow spheres, matching
+        # legged_robot._draw_debug_vis (terrain.debug_viz) in Isaac Gym.
+        debug_viz = bool(config.get("debug_viz", True))
+
     model = mujoco.MjModel.from_xml_path(xml_path)
     model.opt.timestep = simulation_dt
     data = mujoco.MjData(model)
@@ -140,6 +156,7 @@ def run_mujoco(cfg):
     num_height_points = height_points.shape[0]
     assert num_single_obs == 9 + num_actions * 3 + num_height_points, \
         f"num_single_obs ({num_single_obs}) doesn't match 9 + 3*num_actions + height points ({9 + num_actions * 3 + num_height_points})"
+    height_marker_world = np.zeros((num_height_points, 3))  # refreshed at control rate, redrawn every render()
 
     defaut_dof_pos = default_angles
     data.qpos[7:] = defaut_dof_pos
@@ -180,6 +197,8 @@ def run_mujoco(cfg):
             obs[0, 9 + num_actions * 2:9 + num_actions * 3] = action
             obs[0, 9 + num_actions * 3:] = get_height_scan(
                 base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale)
+            if debug_viz:
+                height_marker_world[:] = get_height_points_world(base_xyz, quat, height_points)
 
             hist_obs.append(obs)
             hist_obs.popleft()
@@ -211,6 +230,11 @@ def run_mujoco(cfg):
         data.ctrl = tau
 
         mujoco.mj_step(model, data)
+        if debug_viz:
+            # markers are cleared every render() call, so re-add them each frame
+            for px, py, pz in height_marker_world:
+                viewer.add_marker(pos=[px, py, pz], size=[0.02, 0.02, 0.02],
+                                   rgba=[1, 1, 0, 1], type=mujoco.mjtGeom.mjGEOM_SPHERE)
         viewer.render()
         count_lowlevel += 1
 
