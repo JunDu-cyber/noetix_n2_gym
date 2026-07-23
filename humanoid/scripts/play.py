@@ -37,7 +37,7 @@ def play(args):
     env_cfg.terrain.num_cols = 8  # 设置地形列数
     env_cfg.terrain.curriculum = False  # 课程学习
     env_cfg.terrain.max_init_terrain_level = 5
-    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.0, 0.2, 0., 0.4, 0.4]
+    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.1, 0., 0.25, 0.25]
     # env_cfg.terrain.selected = True
     # env_cfg.terrain.terrain_kwargs = {'type': 'pyramid_stairs_terrain',
     #                                   'step_width': 0.30,
