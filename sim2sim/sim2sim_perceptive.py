@@ -51,16 +51,6 @@ def pd_control(target_q, q, kp, target_dq, dq, kd):
     '''
     return (target_q - q) * kp + (target_dq - dq) * kd
 
-def wrap_to_pi(angle):
-    '''Wraps an angle (rad) into (-pi, pi], matching humanoid.utils.math.wrap_to_pi.'''
-    return (angle + math.pi) % (2. * math.pi) - math.pi
-
-def get_yaw(quat):
-    '''Yaw (rad) extracted from a [x, y, z, w] quaternion. Exact for a pure
-    yaw rotation; a good approximation otherwise since roll/pitch stay small
-    for an upright walking base. Mirrors get_height_scan's yaw extraction.'''
-    return 2. * math.atan2(quat[2], quat[3])
-
 def init_height_points(measured_points_x, measured_points_y):
     '''Grid of (dx, dy) height-scan sample points in the base frame.
     x outer / y inner, matching legged_robot._init_height_points().'''
@@ -134,12 +124,6 @@ def run_mujoco(cfg):
         measured_points_x = config["measured_points_x"]
         measured_points_y = config["measured_points_y"]
 
-        # heading_command=True in training recomputes commands[:,2] every
-        # step from live heading error (legged_robot._post_physics_step_callback),
-        # so a raw static yaw-rate command is off-distribution: nothing
-        # cancels residual sim2sim yaw drift, and it integrates into a spin.
-        heading_command = bool(config.get("heading_command", True))
-
     model = mujoco.MjModel.from_xml_path(xml_path)
     model.opt.timestep = simulation_dt
     data = mujoco.MjData(model)
@@ -173,7 +157,6 @@ def run_mujoco(cfg):
     count_lowlevel = 0
     L_foot_force_list = []
     R_foot_force_list = []
-    heading_base = None  # spawn heading; command.cmd[2] is the requested delta (rad) from it
 
     # Per-actuator effort limits read from the yaml (matches Isaac torque
     # clipping at legged_robot.py:468). Absent -> no clipping.
@@ -189,17 +172,7 @@ def run_mujoco(cfg):
         if count_lowlevel % control_decimation == 0:
             obs = np.zeros([1, num_single_obs], dtype=np.float32)
 
-            cmd_xy = command.cmd[:2] * cmd_scale[:2]
-            if heading_command:
-                yaw = get_yaw(quat)
-                if heading_base is None:
-                    heading_base = yaw  # hold spawn heading when no key is pressed
-                heading_target = heading_base + command.cmd[2]
-                yaw_rate_cmd = np.clip(0.5 * wrap_to_pi(heading_target - yaw), -1., 1.)
-                cmd_z = np.array([yaw_rate_cmd], dtype=np.float32) * cmd_scale[2]
-            else:
-                cmd_z = command.cmd[2:3] * cmd_scale[2]
-            obs[0, :3] = np.concatenate([cmd_xy, cmd_z])
+            obs[0, :3] = command.cmd * cmd_scale
             obs[0, 3:6] = omega * ang_vel_scale
             obs[0, 6:9] = gvec[:3]
             obs[0, 9:9 + num_actions] = (q - defaut_dof_pos) * dof_pos_scale
