@@ -1,8 +1,33 @@
 import torch
-from humanoid.utils.math import quat_apply_yaw
+from isaacgym.torch_utils import quat_apply
+from humanoid.utils.math import quat_apply_yaw, wrap_to_pi
 from humanoid.envs.n2.n2_10dof_env import N2_10dof_Env
 
 class N2PerceptiveEnv(N2_10dof_Env):
+    def _resample_commands(self, env_ids):
+        """After the base class draws a new local (base-frame) velocity
+        command, freeze its WORLD-frame direction/speed at this instant.
+        Used by _reward_world_progress/_reward_world_heading so that turning
+        away from the commanded direction (e.g. to detour around/retreat from
+        an obstacle) stops being reward-neutral -- unlike heading_command,
+        this target is only used by the reward, never fed back into the
+        observed command, so it carries no sim2sim deployment burden."""
+        super()._resample_commands(env_ids)
+        if not hasattr(self, 'commands_world_dir'):
+            self._init_world_progress_buffers()
+        if len(env_ids) == 0:
+            return
+        local_vel = torch.zeros(len(env_ids), 3, device=self.device)
+        local_vel[:, :2] = self.commands[env_ids, :2]
+        world_vel = quat_apply_yaw(self.base_quat[env_ids], local_vel)[:, :2]
+        speed = torch.norm(world_vel, dim=1)
+        self.commands_world_speed[env_ids] = speed
+        self.commands_world_dir[env_ids] = world_vel / speed.clamp(min=1e-6).unsqueeze(1)
+
+    def _init_world_progress_buffers(self):
+        self.commands_world_dir = torch.zeros(self.num_envs, 2, device=self.device)
+        self.commands_world_speed = torch.zeros(self.num_envs, device=self.device)
+
     def compute_observations(self):
 
         # ---- 单帧本体感知 (39) ----
@@ -116,3 +141,33 @@ class N2PerceptiveEnv(N2_10dof_Env):
         # C_i * Σ_j 1{...}, summed over feet.  Sign comes from the config scale.
         Ci = self.contacts.float()  # (E, F)
         return (Ci * bad.sum(dim=-1)).sum(dim=-1)  # (E,)
+
+    # ---------------- world-frame progress / heading (anti-detour) ----------------
+    # tracking_lin_vel/ang_vel are computed in the robot's own base frame, so a
+    # robot that turns away from an obstacle and keeps walking "forward" in its
+    # new heading collects full reward -- nothing penalizes abandoning the
+    # originally-commanded direction. These two terms anchor to the WORLD-frame
+    # direction implied by each freshly-resampled local command (see
+    # _resample_commands above) and reward actual progress/heading against that
+    # fixed target, Extreme-Parkour-style (arXiv:2309.14341's world-frame
+    # r_tracking = min(<v, d_hat>, v_cmd)), so detouring or retreating shows up
+    # as reduced/negative reward instead of being reward-neutral.
+    def _reward_world_progress(self):
+        if not hasattr(self, 'commands_world_dir'):
+            return torch.zeros(self.num_envs, device=self.device)
+        world_vel = self.root_states[:, 7:9]  # world-frame xy velocity (unrotated)
+        proj = torch.sum(world_vel * self.commands_world_dir, dim=1)
+        rew = torch.clamp(proj, max=self.commands_world_speed)
+        rew[self.standing_cmd] = 0.
+        return rew
+
+    def _reward_world_heading(self):
+        if not hasattr(self, 'commands_world_dir'):
+            return torch.zeros(self.num_envs, device=self.device)
+        forward = quat_apply(self.base_quat, self.forward_vec)
+        heading = torch.atan2(forward[:, 1], forward[:, 0])
+        heading_target = torch.atan2(self.commands_world_dir[:, 1], self.commands_world_dir[:, 0])
+        heading_error = wrap_to_pi(heading_target - heading)
+        rew = torch.exp(-torch.square(heading_error) * 2.0)
+        rew[self.standing_cmd] = 0.
+        return rew
