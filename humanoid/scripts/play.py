@@ -37,7 +37,9 @@ def play(args):
     env_cfg.terrain.num_cols = 8  # 设置地形列数
     env_cfg.terrain.curriculum = False  # 课程学习
     env_cfg.terrain.max_init_terrain_level = 5
-    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.0, 0.2, 0., 0.4, 0.4]
+    # 9 项，与 HumanoidTerrain.make_terrain 的新增 straight stairs 分支对齐
+    # （7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8，看不到新地形）
+    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.0, 0.2, 0., 0.2, 0.2, 0.2, 0.2]
     # env_cfg.terrain.selected = True
     # env_cfg.terrain.terrain_kwargs = {'type': 'pyramid_stairs_terrain',
     #                                   'step_width': 0.30,

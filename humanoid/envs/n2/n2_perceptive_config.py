@@ -41,6 +41,14 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             tracking_lin_vel = 1.4
             tracking_ang_vel = 1.6
 
+            # 反"绕路/后退"：把每次重采样指令时的机体系速度指令冻结成世界系方向，
+            # 用世界系实际位移/朝向去跟踪它（仿 Extreme Parkour, arXiv:2309.14341
+            # 的 world-frame progress reward）。转向绕开障碍后继续走"前方"在
+            # tracking_lin_vel/ang_vel（机体系）里满分，但在这里因为世界系方向没变
+            # 而会掉分甚至为负（后退）——首轮训练后需要根据 TensorBoard 重新调整量级
+            world_progress = 1.0
+            world_heading = 0.5
+
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
             # terrain 配置（均未覆盖此值，直接沿用 -1.0 用于实际训练）
