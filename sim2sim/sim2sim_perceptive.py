@@ -262,7 +262,8 @@ def run_mujoco(cfg):
             # markers are cleared every render() call, so re-add them each frame
             for px, py, pz in height_marker_world:
                 viewer.add_marker(pos=[px, py, pz], size=[0.02, 0.02, 0.02],
-                                   rgba=[1, 1, 0, 1], type=mujoco.mjtGeom.mjGEOM_SPHERE)
+                                   rgba=[1, 1, 0, 1], type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                                   label="")  # mjvGeom.label isn't cleared by default -> stale text otherwise
         viewer.render()
         count_lowlevel += 1
 
