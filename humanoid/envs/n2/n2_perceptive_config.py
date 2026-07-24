@@ -45,9 +45,15 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 用世界系实际位移/朝向去跟踪它（仿 Extreme Parkour, arXiv:2309.14341
             # 的 world-frame progress reward）。转向绕开障碍后继续走"前方"在
             # tracking_lin_vel/ang_vel（机体系）里满分，但在这里因为世界系方向没变
-            # 而会掉分甚至为负（后退）——首轮训练后需要根据 TensorBoard 重新调整量级
-            world_progress = 8.0
-            world_heading = 5
+            # 而会掉分甚至为负（后退）。
+            # 8.0/5.0 曾在 0724_00-13-45_ 那次训练里造成 noise_std 从1.0发散到21、
+            # entropy 14→42、tracking 奖励塌陷——world_progress 只在正方向被
+            # commands_world_speed(<=~0.94m/s) 卡住上限，负方向摔倒/推力干扰导致
+            # 的速度尖峰没有下限，8倍放大后单步能扣到-20+，把 PPO 的 value function
+            # 训崩了。_reward_world_progress 现在已改成对称裁剪，这两个系数也退回
+            # 更保守的起点，重新训练后仍需看 TensorBoard 微调
+            world_progress = 1.5
+            world_heading = 1.0
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough

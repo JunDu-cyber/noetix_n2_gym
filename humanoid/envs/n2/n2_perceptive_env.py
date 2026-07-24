@@ -157,7 +157,15 @@ class N2PerceptiveEnv(N2_10dof_Env):
             return torch.zeros(self.num_envs, device=self.device)
         world_vel = self.root_states[:, 7:9]  # world-frame xy velocity (unrotated)
         proj = torch.sum(world_vel * self.commands_world_dir, dim=1)
-        rew = torch.clamp(proj, max=self.commands_world_speed)
+        # Symmetric clamp: commands_world_speed only bounds the *positive* side
+        # (<=~0.94 m/s), but proj itself is unbounded -- a fall/push/stumble can
+        # spike world_vel in the wrong direction with no floor, and at a large
+        # scale that single step can dwarf the rest of the reward stack (a
+        # measured -20+ single-step contribution at scale=8.0), which showed up
+        # as PPO divergence (noise_std 1.0->21.0 over one run) rather than a
+        # useful anti-retreat signal. Clamp both sides so retreat still costs
+        # reward without being able to produce unbounded outliers.
+        rew = torch.clamp(proj, min=-self.commands_world_speed, max=self.commands_world_speed)
         rew[self.standing_cmd] = 0.
         return rew
 
