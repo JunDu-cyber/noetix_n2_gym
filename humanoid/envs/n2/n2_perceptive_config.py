@@ -18,7 +18,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         max_init_terrain_level = 0 #10
         # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
+        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.15, 0.25, 0.15]
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
@@ -60,8 +60,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = -0.15  # sign lives here; reward fn returns +count
 
-            tracking_lin_vel = 1.4
-            tracking_ang_vel = 1.6
+            tracking_lin_vel = 1.2
+            tracking_ang_vel = 1.0
 
             # 反"绕路/后退"：用按指令偏航率积分的参考朝向 yaw_ref 构造世界系
             # 目标方向，奖励世界系实际速度/朝向对它的跟踪（仿 Extreme Parkour,
@@ -80,8 +80,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 判据：跑 1500~2000 iter 后这两项若明显**超过** 0.517/0.408，说明
             # 奖励终于开始度量绕路了；同时 noise_std 应止涨（旧版 1.0→2.61 单调
             # 上升）。
-            world_progress = 1.5
-            world_heading = 1.0
+            world_progress = 1.8
+            world_heading = 1.4
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
