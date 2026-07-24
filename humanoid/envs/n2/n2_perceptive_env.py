@@ -297,38 +297,49 @@ class N2PerceptiveEnv(N2_10dof_Env):
 
     # ---------------- bounded stand-still penalty ----------------
     def _reward_stand_still(self):
-        """Same as N2_10dof_Env._reward_stand_still but with the raw value
-        capped, purely as a divergence guard.
+        """De-weighted, capped version of N2_10dof_Env._reward_stand_still.
 
-        The inherited term is `sum|dof_pos-default| + sum(dof_vel^2)` --
-        unbounded and quadratic in joint velocity. In
-        logs/n2_perceptive/0724_17-08-04_ it reached raw ~330 per standing env
-        and, because only_positive_rewards clips the SUMMED step reward at 0
-        (legged_robot.py:234), pinned the ~20% of envs that are standing_cmd
-        (n2_10dof_env.py:134 zeroes every command on 20% of resamples) at
-        exactly 0 total reward: no advantage signal, so nothing pushed dof_vel
-        back down, so the penalty grew. That runaway rewrote +303 of the
-        episode return via the clamp.
+        The inherited term is `sum|dof_pos-default| + sum(dof_vel^2)`: an L1
+        pose term plus an L2 joint-velocity term that is quadratic and
+        unbounded. Only standing_cmd envs are scored (~20% of envs, since
+        n2_10dof_env.py:134 zeroes every command on 20% of resamples).
 
-        It is NOT an independent bug, and NOT a consequence of
-        heading_command=False (which is the upstream default and is fine):
-        logs/n2_perceptive/0723_19-51-09_ -- same heading_command=False, same
-        corridor-stairs mix, no world rewards -- holds rew_stand_still at
-        -1.71 with mean_noise_std at 0.997. The runaway is downstream of the
-        noise_std that the broken world reward inflated (action noise up ->
-        dof_vel^2 up quadratically), and it scales with the world reward scale
-        (1.0/0.5 -> -2.9, 3.5/1.5 -> -4.6, 5.0/2.5 -> -9.0).
+        Measured under real training conditions (sampled actions, i.e. WITH
+        the policy's exploration noise -- the dominant driver of dof_vel, and
+        the thing an inference-mode probe misses entirely) on the
+        0723_19-51-09_ checkpoint:
 
-        So the cap is deliberately set ABOVE the healthy operating point
-        (~57 raw per standing env, back-computed from that control run's
-        -1.71/s at scale -0.15 and a ~20% standing fraction) rather than
-        de-weighting the dof_vel term: it must not change the standing
-        incentive while training is well behaved, only stop an unbounded
-        single-step outlier from reaching PPO's value function if it is not.
+          standing envs   raw mean 88.8, median 43.5, p95 338, max 3917
+                          per-step total reward BEFORE clipping: mean -0.162
+                          clipped to 0 by only_positive_rewards: 75.3%
+          moving envs     per-step total mean -0.009, clipped: 17.0%
+
+        So standing envs spent three quarters of their steps pinned at exactly
+        0 total reward. Zero reward variation means zero advantage, so the
+        standing posture was never actually trained -- which is visible in
+        deployment as a robot that shakes badly while commanded to stand and
+        goes quiet the moment a velocity command arrives. Note this was
+        measured on a run WITHOUT the world rewards, so the dead zone is not
+        caused by them; they deepen it (rew_stand_still scales with the world
+        reward scale: 1.0/0.5 -> -2.9, 3.5/1.5 -> -4.6, 5.0/2.5 -> -9.0)
+        because higher noise_std means more action noise means quadratically
+        more dof_vel^2.
+
+        Fix: de-weight the quadratic term so the standing state sits back in
+        positive territory and gets a gradient again, and keep a cap as an
+        outlier guard on top. A cap ALONE does not work -- capping raw at 80
+        still left 75% of standing steps clipped, because the problem is the
+        typical value (median 43.5), not just the tail. De-weighting is also
+        preferable to simply lowering the scale: it keeps a non-zero gradient
+        on dof_vel everywhere, whereas above a hard cap that gradient is
+        exactly zero, removing the very signal that is supposed to quiet the
+        joints down.
+
         Overridden here rather than in N2_10dof_Env so the blind n2_10dof/n2
         tasks are untouched."""
         rew = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         sc = self.standing_cmd
         rew[sc] = (torch.sum(torch.abs(self.dof_pos[sc] - self.default_dof_pos), dim=1)
-                   + torch.sum(torch.square(self.dof_vel[sc]), dim=1))
+                   + self.cfg.rewards.stand_still_vel_weight
+                   * torch.sum(torch.square(self.dof_vel[sc]), dim=1))
         return torch.clamp(rew, max=self.cfg.rewards.stand_still_max)

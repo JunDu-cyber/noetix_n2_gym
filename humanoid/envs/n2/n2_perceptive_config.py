@@ -43,15 +43,19 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 物理上跟不上偏航指令（摔倒、楼梯上难转身）时 yaw_ref 以 1 rad/s
         # 跑飞 15 秒，把不可控的方差灌进回报。
         world_heading_max_err = 1.57
-        # _reward_stand_still 的 raw 上限，见 N2PerceptiveEnv._reward_stand_still。
-        # 该项无上界且对 dof_vel 二次，实测单个站立环境 raw 达 ~330，配合
-        # only_positive_rewards 把 20% 的站立环境永久按进截断死区。
-        # 这纯粹是个离群值保险丝，不是要改变站立激励：健康对照
-        # 0723_19-51-09_（同样 heading_command=False、同样走廊楼梯、无 world
-        # 奖励）的 rew_stand_still=-1.71/s，按 scale -0.15 和 ~20% 站立占比
-        # 反推单个站立环境 raw ≈ 57，所以上限取在它之上，训练正常时永不触发，
-        # 只在失控时截断单步离群值、不让它污染 PPO 的 value function。
-        stand_still_max = 80.0
+        # _reward_stand_still 的两个参数，见 N2PerceptiveEnv._reward_stand_still。
+        # 该项 = sum|dof_pos-default| + w*sum(dof_vel²)，速度项二次且无上界。
+        # 在训练真实条件下（采样动作，带策略探索噪声——这是 dof_vel 的主要
+        # 来源，用确定性推理去测会完全漏掉）实测 0723_19-51-09_ 的 checkpoint：
+        # 站立环境 raw 均值 88.8 / 中位数 43.5 / p95 338，每步总奖励在截断前
+        # 均值 -0.162，**75.3% 的步被 only_positive_rewards 削成 0**（运动
+        # 环境只有 17.0%）。站立状态因此长期没有梯度，姿态从未被真正训练，
+        # 表现为部署时"站着抖、一给速度指令就不抖"。
+        # 光封顶没用（封在 80 仍有 75% 被截断，问题出在中位数不在尾部），
+        # 必须给速度项降权把站立状态拉回正区间；降权也优于直接调小 scale，
+        # 因为硬封顶以上 dof_vel 的梯度恰好为 0，反而丢掉了压制抖动的信号。
+        stand_still_vel_weight = 0.05
+        stand_still_max = 20.0
 
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = -0.15  # sign lives here; reward fn returns +count
