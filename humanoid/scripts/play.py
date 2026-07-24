@@ -18,6 +18,48 @@ import numpy as np
 import torch
 
 
+# ---------------------------------------------------------------------------
+# 要测试哪块地形
+#
+# _get_env_origins (legged_robot.py:911) 按
+#     terrain_types = arange(num_envs) // (num_envs / num_cols)
+# 分配地形列，而 play 里 num_envs=1，于是 terrain_types 恒为 0——机器人被永久
+# 钉死在第 0 列（也就是整块地形的边缘），而且每次 reset 都回到同一格，绝大多数
+# 地形根本测不到。terrain_levels 虽然是随机取的，但只在建环境时取一次，之后同样
+# 不变（play 里 curriculum 关着，_update_terrain_curriculum 不会跑）。
+#
+# 下面两个量显式指定要落在哪一格。地形网格在 curriculum=True 时是确定性的
+# （Terrain.curiculum(): 行 i -> 难度 i/num_rows，列 j -> 类型 j/num_cols），
+# 所以 (行, 列) 能精确选中"某种地形的某个难度"。
+#   PLAY_TERRAIN_ROW = None -> 列轮换一圈后自动升一档难度
+#   PLAY_TERRAIN_COL = None -> 每 PLAY_TILE_STEPS 步自动换下一种地形
+PLAY_TERRAIN_ROW = None      # 难度行 0..num_rows-1
+PLAY_TERRAIN_COL = None      # 类型列 0..num_cols-1
+PLAY_TILE_STEPS = 600        # 自动轮换时每格停留的步数
+
+
+def terrain_column_names(proportions, num_cols):
+    """列号 -> 地形类型名。
+
+    复刻 HumanoidTerrain.make_terrain (humanoid/utils/terrain.py:224) 的 elif
+    链，choice 取值与 Terrain.curiculum() 里的 j/num_cols + 0.001 一致，所以
+    打印出来的就是每一列实际生成的地形。
+    """
+    cum = [float(np.sum(proportions[:i + 1])) for i in range(len(proportions))]
+    names = ['平地+粗糙', '离散障碍', '均匀粗糙', '上坡', '下坡',
+             '金字塔上楼梯', '金字塔下楼梯', '直行上楼梯', '直行下楼梯']
+    out = []
+    for j in range(num_cols):
+        choice = j / num_cols + 0.001
+        pick = '平地(无地形,fallback)'
+        for k, c in enumerate(cum):
+            if choice < c:
+                pick = names[k] if k < len(names) else 'idx%d' % k
+                break
+        out.append(pick)
+    return out
+
+
 def play(args):
     """
     播放/测试函数：加载训练好的策略模型并在环境中运行以可视化结果
@@ -35,7 +77,11 @@ def play(args):
     env_cfg.terrain.mesh_type = 'trimesh'  # 设置地形类型为
     env_cfg.terrain.num_rows = 8  # 设置地形行数
     env_cfg.terrain.num_cols = 8  # 设置地形列数
-    env_cfg.terrain.curriculum = False  # 课程学习
+    # 必须打开：curriculum=True 时 Terrain 走 curiculum()，地形网格是确定性的
+    # （行 = 难度，列 = 类型），(行,列) 才能精确选中想测的地形。关掉的话走的是
+    # randomized_terrain()，每格类型和难度都随机，既选不中也复现不了。
+    # 建完环境后会立刻把 env.cfg.terrain.curriculum 改回 False，见下面的说明。
+    env_cfg.terrain.curriculum = True
     env_cfg.terrain.max_init_terrain_level = 5
     # 9 项，与 HumanoidTerrain.make_terrain 的新增 straight stairs 分支对齐
     # （7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8，看不到新地形）
@@ -74,7 +120,38 @@ def play(args):
     # env: 环境对象，用于模拟和交互
     # _: 忽略第二个返回值
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
-    
+
+    # 地形已经按确定性网格生成好了，这里把运行时课程更新关掉：reset_idx 里
+    # `if self.cfg.terrain.curriculum: self._update_terrain_curriculum(...)`
+    # 每次 reset 都会按位移改写 terrain_levels，不关掉就固定不住指定的难度行。
+    env.cfg.terrain.curriculum = False
+
+    tile_names = terrain_column_names(env_cfg.terrain.terrain_proportions,
+                                      env_cfg.terrain.num_cols)
+    print('\n[play] 地形网格 %d 行(难度) x %d 列(类型):'
+          % (env_cfg.terrain.num_rows, env_cfg.terrain.num_cols))
+    for j, nm in enumerate(tile_names):
+        print('       col %d : %s' % (j, nm))
+
+    def goto_tile(row, col):
+        """把机器人挪到第 row 行 / 第 col 列那一格并重置。"""
+        row = int(row) % env_cfg.terrain.num_rows
+        col = int(col) % env_cfg.terrain.num_cols
+        env.terrain_levels[:] = row
+        env.terrain_types[:] = col
+        env.env_origins[:] = env.terrain_origins[env.terrain_levels, env.terrain_types]
+        o, _ = env.reset()
+        print('[play] --> row %d (难度 %.2f) / col %d : %s'
+              % (row, row / env_cfg.terrain.num_rows, col, tile_names[col]))
+        return o
+
+    # 自动轮换默认从第 3 行起：难度 = row/num_rows，第 0 行难度恰好是 0，台阶高度
+    # discrete_obstacles_height = difficulty*0.20 = 0，不管哪一列都是平的，测不出东西。
+    # 3/8 = 0.375 -> 台阶 7.5cm，和策略训练到的 terrain_level≈3.9 大致对得上。
+    cur_row = PLAY_TERRAIN_ROW if PLAY_TERRAIN_ROW is not None else 3
+    cur_col = PLAY_TERRAIN_COL if PLAY_TERRAIN_COL is not None else 0
+    obs = goto_tile(cur_row, cur_col)
+
     # 获取初始观测值
     obs = env.get_observations()
     
@@ -108,6 +185,15 @@ def play(args):
 
     # 主循环：运行指定次数的episode
     for i in range(10*int(env.max_episode_length)):
+        # 自动轮换地形格：列没写死就每 PLAY_TILE_STEPS 步换下一种地形，
+        # 走完一圈且行也没写死时再升一档难度，这样一次 play 能把所有地形都过一遍
+        if PLAY_TERRAIN_COL is None and i > 0 and i % PLAY_TILE_STEPS == 0:
+            cur_col += 1
+            if cur_col % env_cfg.terrain.num_cols == 0 and PLAY_TERRAIN_ROW is None:
+                cur_row += 1
+            obs = goto_tile(cur_row, cur_col)
+            continue
+
         # 获取策略动作
         actions = policy(obs.detach())
         # 执行动作并获取新的状态
