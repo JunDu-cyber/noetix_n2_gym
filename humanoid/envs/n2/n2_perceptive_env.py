@@ -11,22 +11,67 @@ class N2PerceptiveEnv(N2_10dof_Env):
         away from the commanded direction (e.g. to detour around/retreat from
         an obstacle) stops being reward-neutral -- unlike heading_command,
         this target is only used by the reward, never fed back into the
-        observed command, so it carries no sim2sim deployment burden."""
-        super()._resample_commands(env_ids)
+        observed command, so it carries no sim2sim deployment burden.
+
+        Also maintains world_progress_accum/world_progress_ref_pos for
+        _update_terrain_curriculum: commands resample every 5-15s
+        (resampling_time) while an episode can run up to 20s
+        (episode_length_s), so most episodes span 2+ different commanded
+        directions. commands_world_dir gets overwritten every resample, so a
+        robot correctly walking north under command 1 then east under
+        command 2 would have that northward progress erased if curriculum
+        leveling only looked at total spawn-to-now displacement against the
+        FINAL direction -- this is what caused terrain_level to climb fine
+        early (episodes too short to hit a resample) and then plateau once
+        episodes got long enough to commonly span multiple commands. Fix:
+        fold each completed segment's progress into a running per-episode
+        accumulator as its direction is about to be replaced, so multi-
+        segment episodes get credited fairly.
+
+        This is called from two places with different position semantics:
+        the periodic per-step resample in _post_physics_step_callback (root
+        state hasn't moved since last resample -- safe to measure the
+        just-finished segment here), and reset_idx (root state has ALREADY
+        been reset to the new spawn point by the time this runs, since
+        _resample_commands is called after _reset_root_states -- measuring
+        anything here would compare the new spawn against the old episode's
+        reference point, which is meaningless). reset_buf[env_ids] tells
+        them apart: check_termination sets it before reset_idx is entered,
+        and it's stale (from last step, effectively 0 for a continuing
+        episode) during the periodic path since that runs before this
+        step's check_termination. The reset case's final segment is instead
+        folded in by _update_terrain_curriculum, which runs before
+        _reset_root_states -- see there."""
         if not hasattr(self, 'commands_world_dir'):
             self._init_world_progress_buffers()
         if len(env_ids) == 0:
+            super()._resample_commands(env_ids)
             return
+        is_reset = self.reset_buf[env_ids].bool()
+        continuing = env_ids[~is_reset]
+        if len(continuing) > 0:
+            seg_disp = self.root_states[continuing, :2] - self.world_progress_ref_pos[continuing]
+            self.world_progress_accum[continuing] += torch.sum(seg_disp * self.commands_world_dir[continuing], dim=1)
+        reset_ids = env_ids[is_reset]
+        if len(reset_ids) > 0:
+            # _update_terrain_curriculum already folded the final segment of
+            # the episode that just ended into a local total for these envs
+            self.world_progress_accum[reset_ids] = 0.
+
+        super()._resample_commands(env_ids)
         local_vel = torch.zeros(len(env_ids), 3, device=self.device)
         local_vel[:, :2] = self.commands[env_ids, :2]
         world_vel = quat_apply_yaw(self.base_quat[env_ids], local_vel)[:, :2]
         speed = torch.norm(world_vel, dim=1)
         self.commands_world_speed[env_ids] = speed
         self.commands_world_dir[env_ids] = world_vel / speed.clamp(min=1e-6).unsqueeze(1)
+        self.world_progress_ref_pos[env_ids] = self.root_states[env_ids, :2].clone()
 
     def _init_world_progress_buffers(self):
         self.commands_world_dir = torch.zeros(self.num_envs, 2, device=self.device)
         self.commands_world_speed = torch.zeros(self.num_envs, device=self.device)
+        self.world_progress_accum = torch.zeros(self.num_envs, device=self.device)
+        self.world_progress_ref_pos = torch.zeros(self.num_envs, 2, device=self.device)
 
     def _update_terrain_curriculum(self, env_ids):
         """Directional variant of the base class's radial-distance curriculum
@@ -37,19 +82,29 @@ class N2PerceptiveEnv(N2_10dof_Env):
         terrain_level climbed to ~4.9 while rew_stumble/rew_collision stayed
         near zero (i.e. the robot was rarely attempting real contact with the
         stairs at all). This projects displacement onto commands_world_dir
-        (the frozen world-frame direction of the current command, see
-        _resample_commands above) instead of taking its magnitude, so credit
-        only accrues for progress in the direction actually asked for --
-        including correctly demoting a robot that retreats. Only overridden
-        here, not in the shared base class, so n2_10dof/n2 (no world-frame
-        buffers) keep the original radial-distance behavior unaffected."""
+        (the frozen world-frame direction of each command segment, see
+        _resample_commands above) instead of taking radial magnitude, so
+        credit only accrues for progress in the direction actually asked
+        for -- including correctly demoting a robot that retreats. Only
+        overridden here, not in the shared base class, so n2_10dof/n2 (no
+        world-frame buffers) keep the original radial-distance behavior
+        unaffected.
+
+        Runs before _reset_dofs/_reset_root_states (see reset_idx), so
+        root_states here is still the position where the episode actually
+        ended -- folds that final segment's progress into
+        world_progress_accum (built up over any earlier segments this
+        episode by _resample_commands) to get the episode's total directional
+        progress, without needing root_states from after the upcoming reset."""
         if not self.init_done:
             return
         if not hasattr(self, 'commands_world_dir'):
             super()._update_terrain_curriculum(env_ids)
             return
-        displacement = self.root_states[env_ids, :2] - self.env_origins[env_ids, :2]
-        progress = torch.sum(displacement * self.commands_world_dir[env_ids], dim=1)
+        seg_disp = self.root_states[env_ids, :2] - self.world_progress_ref_pos[env_ids]
+        seg_progress = torch.sum(seg_disp * self.commands_world_dir[env_ids], dim=1)
+        progress = self.world_progress_accum[env_ids] + seg_progress
+
         move_up = progress > self.terrain.env_length / 2
         move_down = (progress < torch.norm(self.commands[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5) * ~move_up
         self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
