@@ -44,6 +44,34 @@ def add_roughness(terrain, noise_magnitude=0.02):
         downsampled_scale=0.075,
     )
 
+
+def add_corridor_walls(terrain, wall_width=0.6, wall_height=1.0):
+    """给 stairs_terrain 的台阶两侧加墙，把它变成真正的走廊。
+
+    terrain_utils.stairs_terrain 写的是 `height_field_raw[x切片, :] += height`,
+    高度只随 x 变化，沿 y 完全恒定 —— 实测整块地形每一行沿 y 的高度标准差是
+    0.000000 m。也就是说 y 方向是一条完美的等高线，机器人可以沿着它一直走而永远
+    不用抬腿爬一级台阶。这不是走廊，是一段无限宽的台阶。
+
+    实测策略正是在利用这一点（0724_20-59-57_/model_3000，固定 0.5m/s 前进指令
+    10 秒）：即使台阶只有 2.5cm、存活率 94%，净进展也只有理想值的 25%，而横向位移
+    2.59m 是前进位移(1.23m)的两倍，平均偏航偏离 47.3°。对照平地是 96% 进展、
+    偏航 12°。金字塔楼梯是同一个问题的另一种形式 —— 中心对称，可以沿等半径的环
+    绕圈（10cm 台阶上横向 2.64m、偏航 50.4°）。
+
+    两侧封墙把这条逃逸路径堵死，机器人只剩下沿 x 前进或后退两个选择，而后退正是
+    _reward_world_progress 已经在惩罚的。墙用 += 叠在当前台阶高度之上，所以相对
+    走廊地面始终是同一高度。
+
+    墙宽 0.6m x2，地形块 4m 宽，剩下 2.8m 的通行宽度；机器人出生在块中心 ±1m
+    (legged_robot.py:501)，落点 y 在 1~3m，不会生在墙里。add_terrain_to_map 取
+    中心 2x2m 的最大高度作为 env_origin_z，也取不到墙。
+    """
+    w = int(wall_width / terrain.horizontal_scale)
+    h = int(wall_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :w] += h
+    terrain.height_field_raw[:, -w:] += h
+
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
 
@@ -246,9 +274,11 @@ class HumanoidTerrain(Terrain):
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[7]:
             terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height)
+            add_corridor_walls(terrain)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[8]:
             terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height)
+            add_corridor_walls(terrain)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         else:
             pass
