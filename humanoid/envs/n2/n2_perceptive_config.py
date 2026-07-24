@@ -91,7 +91,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
             # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
             # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
-            stumble = -1.5
+            stumble = -2.5
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):
