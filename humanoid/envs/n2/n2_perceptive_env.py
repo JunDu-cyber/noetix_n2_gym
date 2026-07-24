@@ -4,106 +4,134 @@ from humanoid.utils.math import quat_apply_yaw, wrap_to_pi
 from humanoid.envs.n2.n2_10dof_env import N2_10dof_Env
 
 class N2PerceptiveEnv(N2_10dof_Env):
+    # ------------------------------------------------------------------
+    # World-frame reference heading (anti-detour)
+    # ------------------------------------------------------------------
+    # Round-4 redesign. The previous version FROZE the world-frame command
+    # direction at each resample and never rotated it again -- but
+    # commands[:, 2] simultaneously asks for up to +-1 rad/s of yaw for 5-15 s
+    # (resampling_time), so the frozen target drifted up to +-15 rad relative
+    # to the robot *by design*. Measured consequence (logs/n2_perceptive/
+    # 0724_17-08-04_): a Monte-Carlo robot that tracks its commands perfectly
+    # and never detours scores world_progress 0.517 / world_heading 0.408,
+    # and the trained policy scored 0.434 / 0.388 -- i.e. the terms were
+    # saturated by the yaw command alone and carried no information about
+    # detouring, while injecting a target the policy cannot observe (no
+    # absolute yaw in obs, frame_stack covers only 0.2 s) at a combined scale
+    # larger than tracking_lin_vel + tracking_ang_vel. That showed up as
+    # value_function loss ~3-4x the flat baseline, mean_noise_std climbing
+    # monotonically 1.0 -> 2.61, tracking rewards decaying and terrain_level
+    # stalling.
+    #
+    # Now the reference yaw INTEGRATES the commanded yaw rate, so a robot that
+    # obeys all three command channels scores full marks and only an
+    # *uncommanded* yaw excursion (a detour turn) or a positional
+    # sidestep/retreat loses reward -- the intended semantics. It also
+    # penalises the *integral* of the yaw error, which is exactly what the
+    # rate-based tracking_ang_vel cannot do: a 2 s 90-degree detour turn costs
+    # a little rate error once, then collects full base-frame tracking_lin_vel
+    # for the next 10 s.
     def _resample_commands(self, env_ids):
-        """After the base class draws a new local (base-frame) velocity
-        command, freeze its WORLD-frame direction/speed at this instant.
-        Used by _reward_world_progress/_reward_world_heading so that turning
-        away from the commanded direction (e.g. to detour around/retreat from
-        an obstacle) stops being reward-neutral -- unlike heading_command,
-        this target is only used by the reward, never fed back into the
-        observed command, so it carries no sim2sim deployment burden.
+        """Seed the reference yaw to the robot's actual yaw whenever a new
+        command is drawn, so each command segment starts with zero heading
+        error and any drift accumulated under the previous command is
+        forgiven.
 
-        Also maintains world_progress_accum/world_progress_ref_pos for
-        _update_terrain_curriculum: commands resample every 5-15s
-        (resampling_time) while an episode can run up to 20s
-        (episode_length_s), so most episodes span 2+ different commanded
-        directions. commands_world_dir gets overwritten every resample, so a
-        robot correctly walking north under command 1 then east under
-        command 2 would have that northward progress erased if curriculum
-        leveling only looked at total spawn-to-now displacement against the
-        FINAL direction -- this is what caused terrain_level to climb fine
-        early (episodes too short to hit a resample) and then plateau once
-        episodes got long enough to commonly span multiple commands. Fix:
-        fold each completed segment's progress into a running per-episode
-        accumulator as its direction is about to be replaced, so multi-
-        segment episodes get credited fairly.
-
-        This is called from two places with different position semantics:
-        the periodic per-step resample in _post_physics_step_callback (root
-        state hasn't moved since last resample -- safe to measure the
-        just-finished segment here), and reset_idx (root state has ALREADY
-        been reset to the new spawn point by the time this runs, since
-        _resample_commands is called after _reset_root_states -- measuring
-        anything here would compare the new spawn against the old episode's
-        reference point, which is meaningless). reset_buf[env_ids] tells
-        them apart: check_termination sets it before reset_idx is entered,
-        and it's stale (from last step, effectively 0 for a continuing
-        episode) during the periodic path since that runs before this
-        step's check_termination. The reset case's final segment is instead
-        folded in by _update_terrain_curriculum, which runs before
-        _reset_root_states -- see there."""
-        if not hasattr(self, 'commands_world_dir'):
+        Reads the quaternion from root_states rather than self.base_quat on
+        purpose: this is called from reset_idx AFTER _reset_root_states but
+        BEFORE the "fix reset gravity bug" block that refreshes base_quat
+        (legged_robot.py:219), so base_quat is still the pre-reset orientation
+        at this point while root_states is already the new spawn."""
+        if not hasattr(self, 'yaw_ref'):
             self._init_world_progress_buffers()
-        if len(env_ids) == 0:
-            super()._resample_commands(env_ids)
-            return
-        is_reset = self.reset_buf[env_ids].bool()
-        continuing = env_ids[~is_reset]
-        if len(continuing) > 0:
-            seg_disp = self.root_states[continuing, :2] - self.world_progress_ref_pos[continuing]
-            self.world_progress_accum[continuing] += torch.sum(seg_disp * self.commands_world_dir[continuing], dim=1)
-        reset_ids = env_ids[is_reset]
-        if len(reset_ids) > 0:
-            # _update_terrain_curriculum already folded the final segment of
-            # the episode that just ended into a local total for these envs
-            self.world_progress_accum[reset_ids] = 0.
-
         super()._resample_commands(env_ids)
-        local_vel = torch.zeros(len(env_ids), 3, device=self.device)
-        local_vel[:, :2] = self.commands[env_ids, :2]
-        world_vel = quat_apply_yaw(self.base_quat[env_ids], local_vel)[:, :2]
-        speed = torch.norm(world_vel, dim=1)
-        self.commands_world_speed[env_ids] = speed
-        self.commands_world_dir[env_ids] = world_vel / speed.clamp(min=1e-6).unsqueeze(1)
-        self.world_progress_ref_pos[env_ids] = self.root_states[env_ids, :2].clone()
+        if len(env_ids) == 0:
+            return
+        forward = quat_apply(self.root_states[env_ids, 3:7], self.forward_vec[env_ids])
+        self.yaw_ref[env_ids] = torch.atan2(forward[:, 1], forward[:, 0])
 
     def _init_world_progress_buffers(self):
+        self.yaw_ref = torch.zeros(self.num_envs, device=self.device)
+        self.world_heading_err = torch.zeros(self.num_envs, device=self.device)
         self.commands_world_dir = torch.zeros(self.num_envs, 2, device=self.device)
         self.commands_world_speed = torch.zeros(self.num_envs, device=self.device)
         self.world_progress_accum = torch.zeros(self.num_envs, device=self.device)
-        self.world_progress_ref_pos = torch.zeros(self.num_envs, 2, device=self.device)
+
+    def _post_physics_step_callback(self):
+        # super() resamples any expired commands (seeding yaw_ref for those
+        # envs) and refreshes standing_cmd; the world reference must be built
+        # on top of that, and before check_termination/compute_reward, which
+        # post_physics_step calls straight after this (legged_robot.py:113-117).
+        super()._post_physics_step_callback()
+        self._update_world_reference()
+
+    def _update_world_reference(self):
+        """Integrate the commanded yaw rate into yaw_ref, leak-clamp it to the
+        robot's actual yaw, and rebuild the world-frame command direction."""
+        if not hasattr(self, 'yaw_ref'):
+            self._init_world_progress_buffers()
+
+        self.yaw_ref += self.commands[:, 2] * self.dt
+
+        forward = quat_apply(self.base_quat, self.forward_vec)
+        yaw = torch.atan2(forward[:, 1], forward[:, 0])
+        # Leak clamp: bound how far the reference may run ahead of the robot.
+        # Without it, a command the robot physically cannot track (a fall, or a
+        # hard turn on stairs) lets yaw_ref race away at up to 1 rad/s for 15 s
+        # and both terms collapse for reasons outside the policy's control --
+        # pure return variance. max_err is deliberately pi/2 rather than
+        # something tighter: at pi/2 a 90-degree detour turn still drives
+        # world_progress to ~0 (cos(pi/2)) and world_heading to ~0.007, i.e.
+        # the full anti-detour signal survives, and only *beyond* 90 degrees
+        # does the penalty saturate -- which is fine, that is already maximal.
+        max_err = self.cfg.rewards.world_heading_max_err
+        self.world_heading_err = torch.clamp(wrap_to_pi(self.yaw_ref - yaw), -max_err, max_err)
+        self.yaw_ref = yaw + self.world_heading_err
+
+        # world-frame direction of the base-frame linear velocity command,
+        # rotated by the REFERENCE yaw (not the actual yaw) -- that difference
+        # is the whole anti-detour signal.
+        c, s = torch.cos(self.yaw_ref), torch.sin(self.yaw_ref)
+        vx, vy = self.commands[:, 0], self.commands[:, 1]
+        world_vel_cmd = torch.stack((c * vx - s * vy, s * vx + c * vy), dim=1)
+        self.commands_world_speed = torch.norm(world_vel_cmd, dim=1)
+        self.commands_world_dir = world_vel_cmd / self.commands_world_speed.clamp(min=1e-6).unsqueeze(1)
+
+        # Directional progress for the terrain curriculum, accumulated
+        # incrementally so it is exact regardless of how many command segments
+        # an episode spans. This replaces the reference-position/segment
+        # bookkeeping of rounds 2-3, whose whole bug class (progress made under
+        # an earlier command being erased by a later one) simply cannot occur
+        # when each step is credited against the direction in force that step.
+        self.world_progress_accum += torch.sum(
+            self.root_states[:, 7:9] * self.commands_world_dir, dim=1) * self.dt
+
+    def reset_idx(self, env_ids):
+        # super() runs _update_terrain_curriculum first, which consumes
+        # world_progress_accum for the episode that just ended, so only zero
+        # it afterwards.
+        super().reset_idx(env_ids)
+        if len(env_ids) > 0 and hasattr(self, 'world_progress_accum'):
+            self.world_progress_accum[env_ids] = 0.
 
     def _update_terrain_curriculum(self, env_ids):
         """Directional variant of the base class's radial-distance curriculum
         (legged_robot.py:513). The base version levels up on ANY net
-        displacement from spawn, which a centrally-symmetric obstacle (or
-        just circling/retreating) satisfies as validly as actually crossing
-        it -- confirmed in logs/n2_perceptive/0724_11-26-53_, where
-        terrain_level climbed to ~4.9 while rew_stumble/rew_collision stayed
-        near zero (i.e. the robot was rarely attempting real contact with the
-        stairs at all). This projects displacement onto commands_world_dir
-        (the frozen world-frame direction of each command segment, see
-        _resample_commands above) instead of taking radial magnitude, so
-        credit only accrues for progress in the direction actually asked
-        for -- including correctly demoting a robot that retreats. Only
-        overridden here, not in the shared base class, so n2_10dof/n2 (no
-        world-frame buffers) keep the original radial-distance behavior
-        unaffected.
-
-        Runs before _reset_dofs/_reset_root_states (see reset_idx), so
-        root_states here is still the position where the episode actually
-        ended -- folds that final segment's progress into
-        world_progress_accum (built up over any earlier segments this
-        episode by _resample_commands) to get the episode's total directional
-        progress, without needing root_states from after the upcoming reset."""
+        displacement from spawn, which a centrally-symmetric obstacle (or just
+        circling/retreating) satisfies as validly as actually crossing it --
+        confirmed in logs/n2_perceptive/0724_11-26-53_, where terrain_level
+        climbed to ~4.9 while rew_stumble/rew_collision stayed near zero (the
+        robot was rarely making real contact with the stairs at all). Uses the
+        per-step accumulated projection onto commands_world_dir instead, so
+        credit only accrues for progress in the direction actually asked for.
+        Only overridden here, not in the shared base class, so n2_10dof/n2
+        (no world-frame buffers) keep the original radial behaviour."""
         if not self.init_done:
             return
-        if not hasattr(self, 'commands_world_dir'):
+        if not hasattr(self, 'world_progress_accum'):
             super()._update_terrain_curriculum(env_ids)
             return
-        seg_disp = self.root_states[env_ids, :2] - self.world_progress_ref_pos[env_ids]
-        seg_progress = torch.sum(seg_disp * self.commands_world_dir[env_ids], dim=1)
-        progress = self.world_progress_accum[env_ids] + seg_progress
+        progress = self.world_progress_accum[env_ids]
 
         move_up = progress > self.terrain.env_length / 2
         move_down = (progress < torch.norm(self.commands[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5) * ~move_up
@@ -228,39 +256,79 @@ class N2PerceptiveEnv(N2_10dof_Env):
         return (Ci * bad.sum(dim=-1)).sum(dim=-1)  # (E,)
 
     # ---------------- world-frame progress / heading (anti-detour) ----------------
-    # tracking_lin_vel/ang_vel are computed in the robot's own base frame, so a
-    # robot that turns away from an obstacle and keeps walking "forward" in its
-    # new heading collects full reward -- nothing penalizes abandoning the
-    # originally-commanded direction. These two terms anchor to the WORLD-frame
-    # direction implied by each freshly-resampled local command (see
-    # _resample_commands above) and reward actual progress/heading against that
-    # fixed target, Extreme-Parkour-style (arXiv:2309.14341's world-frame
-    # r_tracking = min(<v, d_hat>, v_cmd)), so detouring or retreating shows up
-    # as reduced/negative reward instead of being reward-neutral.
+    # See the _update_world_reference block at the top of this class for why
+    # the reference yaw integrates the commanded yaw rate instead of being
+    # frozen at resample, and for the measured evidence that the frozen
+    # version carried no anti-detour information at all.
     def _reward_world_progress(self):
+        """Actual world-frame velocity projected on the commanded world
+        direction, Extreme-Parkour-style (arXiv:2309.14341's
+        r_tracking = min(<v, d_hat>, v_cmd)). A robot obeying all three command
+        channels keeps its heading aligned with yaw_ref and scores the full
+        commanded speed; one that turns away to skirt an obstacle, or sidesteps
+        or retreats, loses the projection."""
         if not hasattr(self, 'commands_world_dir'):
             return torch.zeros(self.num_envs, device=self.device)
         world_vel = self.root_states[:, 7:9]  # world-frame xy velocity (unrotated)
         proj = torch.sum(world_vel * self.commands_world_dir, dim=1)
-        # Symmetric clamp: commands_world_speed only bounds the *positive* side
-        # (<=~0.94 m/s), but proj itself is unbounded -- a fall/push/stumble can
-        # spike world_vel in the wrong direction with no floor, and at a large
-        # scale that single step can dwarf the rest of the reward stack (a
-        # measured -20+ single-step contribution at scale=8.0), which showed up
-        # as PPO divergence (noise_std 1.0->21.0 over one run) rather than a
-        # useful anti-retreat signal. Clamp both sides so retreat still costs
-        # reward without being able to produce unbounded outliers.
+        # Symmetric clamp: commands_world_speed bounds the positive side, but
+        # proj itself is unbounded -- a fall/push/stumble can spike world_vel
+        # in the wrong direction with no floor, and at a large scale that
+        # single step dwarfs the rest of the stack (a measured -20+ single-step
+        # contribution at scale 8.0 diverged a run, noise_std 1.0 -> 21.0).
         rew = torch.clamp(proj, min=-self.commands_world_speed, max=self.commands_world_speed)
         rew[self.standing_cmd] = 0.
         return rew
 
     def _reward_world_heading(self):
-        if not hasattr(self, 'commands_world_dir'):
+        """Penalise the *accumulated* yaw error against the commanded yaw rate.
+        Target is yaw_ref, NOT the direction of the linear velocity command:
+        that earlier choice demanded a mean 90-degree (median 90-degree)
+        instantaneous body turn over the real command distribution -- 46% of
+        commands asked for >90 degrees and any vx<0 command asked for ~180 --
+        which fought tracking_lin_vel and world_progress simultaneously.
+        Extreme Parkour has no such conflict only because its commands are
+        always goal-directed/forward-facing."""
+        if not hasattr(self, 'world_heading_err'):
             return torch.zeros(self.num_envs, device=self.device)
-        forward = quat_apply(self.base_quat, self.forward_vec)
-        heading = torch.atan2(forward[:, 1], forward[:, 0])
-        heading_target = torch.atan2(self.commands_world_dir[:, 1], self.commands_world_dir[:, 0])
-        heading_error = wrap_to_pi(heading_target - heading)
-        rew = torch.exp(-torch.square(heading_error) * 2.0)
+        rew = torch.exp(-torch.square(self.world_heading_err) * 2.0)
         rew[self.standing_cmd] = 0.
         return rew
+
+    # ---------------- bounded stand-still penalty ----------------
+    def _reward_stand_still(self):
+        """Same as N2_10dof_Env._reward_stand_still but with the raw value
+        capped, purely as a divergence guard.
+
+        The inherited term is `sum|dof_pos-default| + sum(dof_vel^2)` --
+        unbounded and quadratic in joint velocity. In
+        logs/n2_perceptive/0724_17-08-04_ it reached raw ~330 per standing env
+        and, because only_positive_rewards clips the SUMMED step reward at 0
+        (legged_robot.py:234), pinned the ~20% of envs that are standing_cmd
+        (n2_10dof_env.py:134 zeroes every command on 20% of resamples) at
+        exactly 0 total reward: no advantage signal, so nothing pushed dof_vel
+        back down, so the penalty grew. That runaway rewrote +303 of the
+        episode return via the clamp.
+
+        It is NOT an independent bug, and NOT a consequence of
+        heading_command=False (which is the upstream default and is fine):
+        logs/n2_perceptive/0723_19-51-09_ -- same heading_command=False, same
+        corridor-stairs mix, no world rewards -- holds rew_stand_still at
+        -1.71 with mean_noise_std at 0.997. The runaway is downstream of the
+        noise_std that the broken world reward inflated (action noise up ->
+        dof_vel^2 up quadratically), and it scales with the world reward scale
+        (1.0/0.5 -> -2.9, 3.5/1.5 -> -4.6, 5.0/2.5 -> -9.0).
+
+        So the cap is deliberately set ABOVE the healthy operating point
+        (~57 raw per standing env, back-computed from that control run's
+        -1.71/s at scale -0.15 and a ~20% standing fraction) rather than
+        de-weighting the dof_vel term: it must not change the standing
+        incentive while training is well behaved, only stop an unbounded
+        single-step outlier from reaching PPO's value function if it is not.
+        Overridden here rather than in N2_10dof_Env so the blind n2_10dof/n2
+        tasks are untouched."""
+        rew = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        sc = self.standing_cmd
+        rew[sc] = (torch.sum(torch.abs(self.dof_pos[sc] - self.default_dof_pos), dim=1)
+                   + torch.sum(torch.square(self.dof_vel[sc]), dim=1))
+        return torch.clamp(rew, max=self.cfg.rewards.stand_still_max)
