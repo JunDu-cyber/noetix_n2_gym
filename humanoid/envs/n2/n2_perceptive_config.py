@@ -50,10 +50,13 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # entropy 14→42、tracking 奖励塌陷——world_progress 只在正方向被
             # commands_world_speed(<=~0.94m/s) 卡住上限，负方向摔倒/推力干扰导致
             # 的速度尖峰没有下限，8倍放大后单步能扣到-20+，把 PPO 的 value function
-            # 训崩了。_reward_world_progress 现在已改成对称裁剪，这两个系数也退回
-            # 更保守的起点，重新训练后仍需看 TensorBoard 微调
-            world_progress = 3.5
-            world_heading = 1.5
+            # 训崩了。_reward_world_progress 现在已改成对称裁剪。
+            # 3.5/1.5 在 0724_11-26-53_ 里训练稳定(noise_std 1.6→1.9 横盘，未发散)，
+            # 但 rew_world_progress/rew_world_heading 只涨到理论上限的10~20%就横盘，
+            # 还有梯度空间；对称裁剪已经堵住了离群值这条发散路径，所以再温和上调，
+            # 幅度明显小于上次 3.5/1.5→8.0/5.0 那次跳变，训练时仍需盯紧 noise_std
+            world_progress = 5.0
+            world_heading = 2.5
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough

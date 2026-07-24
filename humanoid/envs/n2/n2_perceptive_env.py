@@ -28,6 +28,36 @@ class N2PerceptiveEnv(N2_10dof_Env):
         self.commands_world_dir = torch.zeros(self.num_envs, 2, device=self.device)
         self.commands_world_speed = torch.zeros(self.num_envs, device=self.device)
 
+    def _update_terrain_curriculum(self, env_ids):
+        """Directional variant of the base class's radial-distance curriculum
+        (legged_robot.py:513). The base version levels up on ANY net
+        displacement from spawn, which a centrally-symmetric obstacle (or
+        just circling/retreating) satisfies as validly as actually crossing
+        it -- confirmed in logs/n2_perceptive/0724_11-26-53_, where
+        terrain_level climbed to ~4.9 while rew_stumble/rew_collision stayed
+        near zero (i.e. the robot was rarely attempting real contact with the
+        stairs at all). This projects displacement onto commands_world_dir
+        (the frozen world-frame direction of the current command, see
+        _resample_commands above) instead of taking its magnitude, so credit
+        only accrues for progress in the direction actually asked for --
+        including correctly demoting a robot that retreats. Only overridden
+        here, not in the shared base class, so n2_10dof/n2 (no world-frame
+        buffers) keep the original radial-distance behavior unaffected."""
+        if not self.init_done:
+            return
+        if not hasattr(self, 'commands_world_dir'):
+            super()._update_terrain_curriculum(env_ids)
+            return
+        displacement = self.root_states[env_ids, :2] - self.env_origins[env_ids, :2]
+        progress = torch.sum(displacement * self.commands_world_dir[env_ids], dim=1)
+        move_up = progress > self.terrain.env_length / 2
+        move_down = (progress < torch.norm(self.commands[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5) * ~move_up
+        self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
+        self.terrain_levels[env_ids] = torch.where(self.terrain_levels[env_ids] >= self.max_terrain_level,
+                                                   torch.randint_like(self.terrain_levels[env_ids], self.max_terrain_level),
+                                                   torch.clip(self.terrain_levels[env_ids], 0))
+        self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+
     def compute_observations(self):
 
         # ---- 单帧本体感知 (39) ----
