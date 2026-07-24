@@ -254,7 +254,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             
             # 步态风格奖励
             stand_still = -0.15
-            feet_air_time = 2
+            feet_air_time = 2.5
             default_joint_pos = 1.0
             #default_up_joint_pos = 1.0 #0.5
             
@@ -265,7 +265,7 @@ class N2_10dof_Cfg(LeggedRobotCfg):
             
             # 能耗奖励
             dof_acc = -2.5e-7
-            energy_cost = -1e-3
+            energy_cost = -5e-4
             action_smoothness = -5e-3
             
             # 其他奖励
