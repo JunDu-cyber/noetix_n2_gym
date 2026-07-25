@@ -327,12 +327,25 @@ class N2PerceptiveEnv(N2_10dof_Env):
             return torch.zeros(self.num_envs, device=self.device)
         world_vel = self.root_states[:, 7:9]  # world-frame xy velocity (unrotated)
         proj = torch.sum(world_vel * self.commands_world_dir, dim=1)
-        # Symmetric clamp: commands_world_speed bounds the positive side, but
-        # proj itself is unbounded -- a fall/push/stumble can spike world_vel
-        # in the wrong direction with no floor, and at a large scale that
-        # single step dwarfs the rest of the stack (a measured -20+ single-step
-        # contribution at scale 8.0 diverged a run, noise_std 1.0 -> 21.0).
-        rew = torch.clamp(proj, min=-self.commands_world_speed, max=self.commands_world_speed)
+        # Normalised by the commanded speed, matching Extreme Parkour's
+        # _reward_tracking_goal_vel, which divides by commands[:, 0].
+        #
+        # The previous form returned the raw projection in m/s, clamped to
+        # +-commands_world_speed. That is speed-DEPENDENT: a robot perfectly
+        # obeying a 0.3 m/s command scored 0.3 while one obeying 0.8 m/s scored
+        # 0.8, so the term structurally paid more for fast commands and less for
+        # slow ones -- and slow is exactly what careful stair climbing needs.
+        # Normalised, full obedience scores 1.0 at any commanded speed, so
+        # climbing slowly is no longer penalised relative to striding on flat.
+        #
+        # The denominator floor guards commands whose xy speed is near zero:
+        # min_cmd_vel (0.2) only bounds the norm of the full 3-vector, so a
+        # wz-dominated command can leave |v_xy| ~ 0 and the ratio would blow up.
+        # The symmetric [-1, 1] clamp keeps the original outlier guard -- proj is
+        # unbounded below, and a fall/push spiking world_vel the wrong way once
+        # cost a run its stability (noise_std 1.0 -> 21.0 at scale 8.0).
+        denom = self.commands_world_speed.clamp(min=self.cfg.rewards.world_progress_min_speed)
+        rew = torch.clamp(proj / denom, min=-1.0, max=1.0)
         rew[self.standing_cmd] = 0.
         return rew
 
