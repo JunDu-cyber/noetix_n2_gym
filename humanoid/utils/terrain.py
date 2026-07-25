@@ -45,27 +45,34 @@ def add_roughness(terrain, noise_magnitude=0.02):
     )
 
 
-def add_center_platform(terrain, platform_size=1.5):
-    """在 stairs_terrain 的正中央压出一块平台，作为出生落脚区。
+def directional_stairs(terrain, step_width, step_height, platform_size=1.5):
+    """中心平台 + 沿 x 双向逐级升/降的定向楼梯（沿 y 恒定）。
 
-    terrain_utils.stairs_terrain 是沿 x（轴 0）单调递增的整片楼梯、没有平台，而
-    机器人出生在地形块正中心（add_terrain_to_map: env_origin_x=(i+0.5)*env_length），
-    于是被丢在半山腰的某一级台阶上、没有助跑就要立刻爬。实测直行楼梯连 2.5cm 都
-    爬不动、一半在摔（0725_00-30-19_/model_11999，固定 0.5m/s 前进：存活 41~52%、
-    净进展 8~35%），而课程升级判据是 progress>env_length/2=2m 才升级、否则降级，
-    所以直行楼梯列被永久压在 0~1 级、机器人从没在高楼梯上训练过 —— 这是"爬不上
-    10cm"的真正根因。pyramid_stairs_terrain 之所以能爬，正是因为它有 platform_size
-    中央平台；这里给直行楼梯补上同样的东西。
+    机器人固定出生在地形块正中心（add_terrain_to_map: env_origin_x=(i+0.5)*
+    env_length），无法改到边缘（地形块边对边紧贴、没有独立出生区）。所以平台必须落
+    在中心 —— 而且平台就是这段楼梯的"底/起点"：台阶从平台边缘沿 ±x 一级级升起，
+    机器人站在平台上（climb 的起点），前进即从底部往上爬。
 
-    做法：把中心 ±platform/2 的 x 带压平到中心那一级的高度。楼梯原本单调，所以压
-    平后 —— -x 侧是更低的台阶、中心是平台、+x 侧是更高的台阶。机器人出生在平台上，
-    前进(+x)指令有助跑再逐级往上爬，后退(-x)指令则往下走。出生点完全不动（仍是块
-    中心），只是把中心变平，所以不需要地形块之间有任何空隙（它们本就边对边紧贴，
-    没有空间放独立出生区 —— 见 add_terrain_to_map）。沿 y 恒定的性质保持不变。
+    这是 pyramid_stairs_terrain 的一维(定向)版本：pyramid 沿 xy 两个方向都收，可以
+    沿等高环绕圈绕过；这里只沿 x 收、沿 y 恒定，所以是定向的、必须正面爬（y 向的
+    等高绕行由世界系奖励负责压制，实测最新策略横移已降到 ~0.3m）。
+
+    为什么不是"压平单调楼梯的中段"（前一版做法，已废弃）：那样机器人生在半山腰
+    (mid-height)、不是楼梯的底，而且平台一侧会和相邻台阶差出好几级、留下一个突兀的
+    台坎。从中心把台阶"长出来"没有这个问题，机器人真正站在底部平台上起步。
+
+    step_height>0 -> 两侧升高（谷底平台，前进=上楼）；<0 -> 两侧降低（台顶平台，
+    前进=下楼），分别对应 index 7 / index 8。
     """
-    cx = terrain.height_field_raw.shape[0] // 2
+    sw = max(1, int(step_width / terrain.horizontal_scale))
+    sh = int(step_height / terrain.vertical_scale)
     half = max(1, int((platform_size / terrain.horizontal_scale) / 2))
-    terrain.height_field_raw[cx - half: cx + half, :] = terrain.height_field_raw[cx, :]
+    n = terrain.height_field_raw.shape[0]
+    cx = n // 2
+    x = np.arange(n)
+    d = np.abs(x - cx) - half                      # 超出平台边缘多少像素
+    k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台内=0）
+    terrain.height_field_raw[:, :] = (k * sh)[:, None]
 
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
@@ -268,12 +275,12 @@ class HumanoidTerrain(Terrain):
             terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height, platform_size=1.)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[7]:
-            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height)
-            add_center_platform(terrain, getattr(self.cfg, 'stairs_platform_size', 1.5))
+            directional_stairs(terrain, step_width, discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[8]:
-            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height)
-            add_center_platform(terrain, getattr(self.cfg, 'stairs_platform_size', 1.5))
+            directional_stairs(terrain, step_width, -discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         else:
             pass
