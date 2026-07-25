@@ -46,32 +46,28 @@ def add_roughness(terrain, noise_magnitude=0.02):
 
 
 def directional_stairs(terrain, step_width, step_height, platform_size=1.5):
-    """中心平台 + 沿 x 双向逐级升/降的定向楼梯（沿 y 恒定）。
+    """-x 端底部平台 + 沿 +x 单向逐级升/降、贯穿整块地形的定向长楼梯（沿 y 恒定）。
 
-    机器人固定出生在地形块正中心（add_terrain_to_map: env_origin_x=(i+0.5)*
-    env_length），无法改到边缘（地形块边对边紧贴、没有独立出生区）。所以平台必须落
-    在中心 —— 而且平台就是这段楼梯的"底/起点"：台阶从平台边缘沿 ±x 一级级升起，
-    机器人站在平台上（climb 的起点），前进即从底部往上爬。
+    机器人在 -x 端的底部平台出生（见 N2PerceptiveEnv._reset_root_states 把楼梯格的
+    出生点挪到这里），正对一整块地形长度的楼梯往 +x 爬(up)或走下(down)。用整块地形
+    铺楼梯、而不是从中心出生 —— 中心出生会把可爬长度砍掉一半，楼梯显得很短。
 
-    这是 pyramid_stairs_terrain 的一维(定向)版本：pyramid 沿 xy 两个方向都收，可以
-    沿等高环绕圈绕过；这里只沿 x 收、沿 y 恒定，所以是定向的、必须正面爬（y 向的
-    等高绕行由世界系奖励负责压制，实测最新策略横移已降到 ~0.3m）。
+    -x 端(轴 0 低端)紧贴的是上一难度级的同类楼梯，其顶比本块的底高，天然形成一堵
+    背墙，正好挡住后退、逼机器人正面往上爬。沿 y 恒定=定向：不能沿 y 等高绕圈
+    （pyramid 沿 xy 都收所以能绕，这里只沿 x 收；y 向等高绕行由世界系奖励压制，
+    实测最新策略横移已降到 ~0.3m）。
 
-    为什么不是"压平单调楼梯的中段"（前一版做法，已废弃）：那样机器人生在半山腰
-    (mid-height)、不是楼梯的底，而且平台一侧会和相邻台阶差出好几级、留下一个突兀的
-    台坎。从中心把台阶"长出来"没有这个问题，机器人真正站在底部平台上起步。
-
-    step_height>0 -> 两侧升高（谷底平台，前进=上楼）；<0 -> 两侧降低（台顶平台，
-    前进=下楼），分别对应 index 7 / index 8。
+    step_height>0 -> 往 +x 升高（底部平台在最低，前进=上楼，index 7）；
+    step_height<0 -> 往 +x 降低（底部平台在最高，前进=下楼，index 8）。
+    平台恒为 0 高度；_reset_root_states 据此把出生 z 设成"平台高度+站立高度"。
     """
     sw = max(1, int(step_width / terrain.horizontal_scale))
     sh = int(step_height / terrain.vertical_scale)
-    half = max(1, int((platform_size / terrain.horizontal_scale) / 2))
+    plat = max(1, int(platform_size / terrain.horizontal_scale))
     n = terrain.height_field_raw.shape[0]
-    cx = n // 2
     x = np.arange(n)
-    d = np.abs(x - cx) - half                      # 超出平台边缘多少像素
-    k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台内=0）
+    d = x - plat                                    # 超出底部平台多少像素（<=0 即平台内）
+    k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台=0，往 +x 递增）
     terrain.height_field_raw[:, :] = (k * sh)[:, None]
 
 class Terrain:
