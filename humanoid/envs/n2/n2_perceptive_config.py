@@ -24,13 +24,13 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         #              并把权重压到直行楼梯上——它是要攻克的目标地形。
         # [平地; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]（旧 7 项注释保留供参考）
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0.0, 0.15, 0.05, 0.05, 0.0, 0.1, 0.1, 0.30, 0.25]
+        terrain_proportions = [0.0, 0.15, 0.0, 0.0, 0.0, 0.05, 0.15, 0.40, 0.25]
 
         # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
         # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
         # 对早期楼梯太苛刻，把楼梯列钉死在 0 级。降到 1.5m 让"爬了一段真台阶"就能升级，
         # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
-        curriculum_up_distance = 1.5
+        curriculum_up_distance = 1.6
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
@@ -81,8 +81,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
             feet_air_time = 4.0
 
-            tracking_lin_vel = 1.3
-            tracking_ang_vel = 1.0
+            tracking_lin_vel = 1.2
+            tracking_ang_vel = 0.8
 
             # 反"绕路/后退"：用按指令偏航率积分的参考朝向 yaw_ref 构造世界系
             # 目标方向，奖励世界系实际速度/朝向对它的跟踪（仿 Extreme Parkour,
@@ -101,15 +101,15 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 判据：跑 1500~2000 iter 后这两项若明显**超过** 0.517/0.408，说明
             # 奖励终于开始度量绕路了；同时 noise_std 应止涨（旧版 1.0→2.61 单调
             # 上升）。
-            world_progress = 2.2
-            world_heading = 0.8
+            world_progress = 2.5
+            world_heading = 1.0
 
             # 反冻结：命令要求前进却原地不动时把"动"抬到"冻"之上，破解楼梯前站死的
             # 局部最优（见 N2PerceptiveEnv._reward_anti_freeze）。正奖励、低速饱和，
             # 量级与 tracking_lin_vel(1.4) 同级即可，太大反而催生莽撞前冲。先给 1.0，
             # 跑一轮看 rew_anti_freeze 是否随 terrain_level 上升而上升、且 stand_still
             # 不反弹；若楼梯前仍犹豫可加到 1.5~2.0。
-            anti_freeze = 1.0
+            anti_freeze = 1.5
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
