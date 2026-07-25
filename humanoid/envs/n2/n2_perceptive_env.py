@@ -116,6 +116,56 @@ class N2PerceptiveEnv(N2_10dof_Env):
         if len(env_ids) > 0 and hasattr(self, 'world_progress_accum'):
             self.world_progress_accum[env_ids] = 0.
 
+    # ---------------- 楼梯格：从底部平台出生 ----------------
+    def _stairs_tile_mask(self):
+        """哪些地形列是直行楼梯（terrain_proportions 的 index 7/8 分支）。
+
+        复刻 Terrain.curiculum() 的 choice=j/num_cols+0.001 与 make_terrain 的 elif
+        链，只在 curriculum=True 的确定性网格下成立（训练就是这么跑的）。
+        """
+        props = self.cfg.terrain.terrain_proportions
+        cum = [float(np.sum(props[:i + 1])) for i in range(len(props))]
+        n = self.cfg.terrain.num_cols
+        mask = torch.zeros(n, dtype=torch.bool, device=self.device)
+        for j in range(n):
+            choice = j / n + 0.001
+            idx = next((k for k, c in enumerate(cum) if choice < c), -1)
+            mask[j] = idx in (7, 8)
+        return mask
+
+    def _reset_root_states(self, env_ids):
+        """把直行楼梯格的出生点从块中心挪到 -x 端的底部平台。
+
+        directional_stairs 让楼梯从 -x 端底部平台贯穿整块地形往 +x 升/降。基类把
+        机器人放在块中心（env_origins）——那是半山腰、可爬长度只剩一半。这里对楼梯
+        列把出生点移到底部平台中央：
+          x: env_origin_x - env_length/2 + platform/2，抖动收窄到 ±(platform*0.4)，
+             免得越过 -x 端背墙(上一级楼梯的顶)或直接生到台阶上。
+          z: 底部平台恒为 0 高度，而基类已按块中心高度(env_origin_z，半山腰、偏高)
+             设了 root_z，会让机器人悬空下坠。改成 base_init 站立高度 + 0.05。
+        y 保持基类的 ±1m（楼梯沿 y 恒高，任意 y 出生等价）。其他地形不受影响。
+        """
+        super()._reset_root_states(env_ids)
+        if not self.custom_origins or len(env_ids) == 0:
+            return
+        if not hasattr(self, 'stairs_tile'):
+            self.stairs_tile = self._stairs_tile_mask()
+        on_stairs = self.stairs_tile[self.terrain_types[env_ids]]
+        if not torch.any(on_stairs):
+            return
+        ids = env_ids[on_stairs]
+        plat = getattr(self.cfg.terrain, 'stairs_platform_size', 1.5)
+        base_x = self.env_origins[ids, 0] - self.terrain.env_length / 2. + plat / 2.
+        jit = min(plat * 0.4, 0.5)
+        self.root_states[ids, 0] = base_x + torch_rand_float(
+            -jit, jit, (len(ids), 1), device=self.device).squeeze(1)
+        # 底部平台高度=0，覆盖掉基类按块中心高度设的 root_z
+        self.root_states[ids, 2] = self.base_init_state[2] + 0.05
+        ids32 = ids.to(dtype=torch.int32)
+        self.gym.set_actor_root_state_tensor_indexed(
+            self.sim, gymtorch.unwrap_tensor(self.root_states),
+            gymtorch.unwrap_tensor(ids32), len(ids32))
+
     def _update_terrain_curriculum(self, env_ids):
         """Directional variant of the base class's radial-distance curriculum
         (legged_robot.py:513). The base version levels up on ANY net

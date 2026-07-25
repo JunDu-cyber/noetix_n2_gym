@@ -26,10 +26,10 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
         terrain_proportions = [0.0, 0.15, 0.1, 0.0, 0.0, 0.05, 0.15, 0.30, 0.25]
 
-        # 直行楼梯（index 7/8）中央平台尺寸，见 utils/terrain.py 的 add_center_platform。
-        # stairs_terrain 是没有平台的单调整片楼梯，机器人出生在块中心=半山腰某级台阶、
-        # 没助跑就要爬，实测连 2.5cm 都爬不动、一半在摔，课程因此永远卡在低级。补上
-        # 中央平台（pyramid_stairs 本来就有）让它有落脚助跑区。出生点不变、无需块间空隙。
+        # 直行楼梯（index 7/8）-x 端底部平台尺寸，见 utils/terrain.py 的
+        # directional_stairs 和 N2PerceptiveEnv._reset_root_states。楼梯从这块底部
+        # 平台贯穿整块地形往 +x 升/降，机器人在平台上出生、正对整段楼梯正面爬 ——
+        # 用整块地形铺楼梯（中心出生会把可爬长度砍半、楼梯太短）。
         stairs_platform_size = 1.5
         # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
         # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
