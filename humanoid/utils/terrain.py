@@ -44,6 +44,38 @@ def add_roughness(terrain, noise_magnitude=0.02):
         downsampled_scale=0.075,
     )
 
+def directional_stairs(terrain, step_width, step_height, platform_size=1.5):
+    """-x 端底部平台 + 沿 +x 单向逐级升/降、贯穿整块地形的定向长楼梯（沿 y 恒定）。
+
+    机器人在 -x 端的底部平台出生（见 N2PerceptiveEnv._reset_root_states 把楼梯格的
+    出生点挪到这里），正对一整块地形长度的楼梯往 +x 爬(up)或走下(down)。
+
+    【为什么必须有这块平台】isaacgym 的 terrain_utils.stairs_terrain 是整个地形族里
+    唯一不接受 platform_size 的函数——legged_gym 的每个子地形都传 platform_size=3./4.，
+    IsaacLab 的 pyramid_stairs 用 platform_width=3.0，都是为了保证"机器人出生在平地上"。
+    而出生高度沿用 legged_gym 的 env_origin_z = max(中心±1m 窗口)，该式默认中心是平的；
+    在单调楼梯上它会取到前方 1m 处的最高台阶，实测出生点悬空：台阶 5cm→0.20m、
+    10cm→0.40m、20cm→0.80m（金字塔楼梯因为有平台恒为 0.00m）。也就是每次 reset 都在
+    自由落体。加上这块平台后，出生点落在 0 高度的平地上，契约恢复。
+
+    -x 端(轴 0 低端)紧贴的是上一难度级的同类楼梯，其顶比本块的底高，天然形成一堵
+    背墙，正好挡住后退、逼机器人正面往上爬。沿 y 恒定=定向：不能沿 y 等高绕圈
+    （pyramid 沿 xy 都收所以能绕，这里只沿 x 收；y 向等高绕行由世界系奖励压制，
+    实测最新策略横移已降到 ~0.3m）。
+
+    step_height>0 -> 往 +x 升高（底部平台在最低，前进=上楼，index 7）；
+    step_height<0 -> 往 +x 降低（底部平台在最高，前进=下楼，index 8）。
+    平台恒为 0 高度；_reset_root_states 据此把出生 z 设成"平台高度+站立高度"。
+    """
+    sw = max(1, int(step_width / terrain.horizontal_scale))
+    sh = int(step_height / terrain.vertical_scale)
+    plat = max(1, int(platform_size / terrain.horizontal_scale))
+    n = terrain.height_field_raw.shape[0]
+    x = np.arange(n)
+    d = x - plat                                    # 超出底部平台多少像素（<=0 即平台内）
+    k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台=0，往 +x 递增）
+    terrain.height_field_raw[:, :] = (k * sh)[:, None]
+
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
 
@@ -245,10 +277,12 @@ class HumanoidTerrain(Terrain):
             terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height, platform_size=1.)
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[7]:
-            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height)
+            directional_stairs(terrain, step_width, discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[8]:
-            terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height)
+            directional_stairs(terrain, step_width, -discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         else:
             pass

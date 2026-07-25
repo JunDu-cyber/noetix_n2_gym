@@ -32,6 +32,29 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
         curriculum_up_distance = 1.6
 
+        # 地形块 4m -> 8m，与"亲兄弟"对齐：legged_gym 用 terrain_length/width = 8.，
+        # IsaacLab 的 ROUGH_TERRAINS_CFG 也是 8m 块。4m 块下 directional_stairs 去掉
+        # 1.5m 平台只剩 2.5m 可爬段，机器人爬几级就到顶；8m 块把可爬段拉到 6.5m
+        # （踏面 0.3~0.45m ≈ 14~21 级），课程才有持续往上推的空间。
+        # 只覆盖 perceptive，盲策略 n2_10dof/n2 仍是 4m，不受影响。
+        # 代价：地形总面积变 4 倍（10x10 块 = 80x80m），trimesh 顶点数同步上升，
+        # 建图时间与显存都会涨；若显存吃紧就调小 num_rows/num_cols。
+        terrain_length = 8.
+        terrain_width = 8.
+
+        # directional_stairs 的 -x 端底部平台尺寸（m），机器人在这块平台上出生。
+        # 【为什么必须有】isaacgym 的 stairs_terrain 是地形族里唯一不接受 platform_size
+        # 的函数，而出生高度沿用 legged_gym 的 env_origin_z = max(中心±1m 窗口)，该式
+        # 默认中心是平的；在单调楼梯上它取到前方 1m 处的最高台阶，实测出生悬空
+        # 台阶5cm→0.20m / 10cm→0.40m / 20cm→0.80m，即每次 reset 都自由落体。
+        # legged_gym 每个子地形都传 platform_size=3./4.、IsaacLab pyramid_stairs 用
+        # platform_width=3.0，都是在维持"出生在平地上"这个契约。
+        # 保持 1.5 而不随块尺寸放大到 3.0：出生点在平台中心，平台中心到楼梯起点的
+        # 距离 = plat/2 = 0.75m，正好让 curriculum_up_distance=1.6 的语义不变
+        # （1.6-0.75=0.85m 才是真正踩在台阶上的行进距离）。若放大到 3.0，光走完平台
+        # 就要 1.5m，1.6 的阈值几乎不用爬台阶就能升级，课程会被架空。
+        stairs_platform_size = 1.5
+
     class commands(N2_10dof_Cfg.commands):
         # 站立指令比例 0.20 -> 0.05。基类给了 20% 的环境"全部命令为 0"，感知爬楼
         # 任务里这等于拿 20% 的算力专门训练"站着不动"——而 MuJoCo 复现出来的失败
