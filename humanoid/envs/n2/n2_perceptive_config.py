@@ -24,7 +24,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         #              并把权重压到直行楼梯上——它是要攻克的目标地形。
         # [平地; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]（旧 7 项注释保留供参考）
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0.0, 0.15, 0.1, 0.0, 0.0, 0.05, 0.15, 0.30, 0.25]
+        terrain_proportions = [0.0, 0.15, 0.05, 0.05, 0.0, 0.1, 0.1, 0.30, 0.25]
 
         # 直行楼梯（index 7/8）-x 端底部平台尺寸，见 utils/terrain.py 的
         # directional_stairs 和 N2PerceptiveEnv._reset_root_states。楼梯从这块底部
