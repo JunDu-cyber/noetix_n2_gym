@@ -84,34 +84,13 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         stand_still_vel_weight = 0.05
         stand_still_max = 20.0
 
-        # _reward_anti_freeze 的饱和阈值（m/s）：命令方向上的世界系前进速度达到该值
-        # 即拿满该项奖励，再快不再加分。取 0.15（几 cm/s）——目的是打破"看到楼梯就
-        # 原地站死"的局部最优（only_positive_rewards 把站立总回报钳到 0，惩罚被一并
-        # 钳掉、没有梯度；正奖励且低速饱和，才能把"动"抬到"冻"之上而不变成飙速、
-        # 不跟 tracking_lin_vel 抢）。阈值越小、脱离静止的梯度越陡。
+
         anti_freeze_speed = 0.15
 
-        # _reward_world_progress 归一化分母的下限（m/s）。该项现在除以指令速度
-        # （照抄 Extreme Parkour 的 tracking_goal_vel/cmd），完美遵循指令在任何
-        # 速度下都得 1.0，不再结构性惩罚"慢而稳地爬楼"。min_cmd_vel=0.2 只约束
-        # 三维指令的模长，wz 主导的指令仍可能让 |v_xy| 接近 0，故给分母兜底。
         world_progress_min_speed = 0.1
 
         class scales(N2_10dof_Cfg.rewards.scales):
-            # 落脚质量。-0.15 -> -0.35：三个"亲兄弟"项目（命令接口同为 vx/vy/wz 的
-            # 感知运动工作）在楼梯上靠的都是足部落点奖励而非世界系反绕路奖励——
-            # Limx Oli(arXiv:2512.07464) 24 个奖励项里零个 progress 项，用 feet hold /
-            # feet stair flat；PRIOR 用 terrain-adaptive footstep rewards；IsaacLab H1
-            # 只有 feet_air_time / feet_slide。实测本项当前只有 -0.025~-0.043，在整个
-            # stack 里几乎不可见，加权到 -0.35 后约 -0.06~-0.10，仍远小于正项总和
-            # (~1.5)，不会制造 only_positive_rewards 死区。
-            # 注意符号差异：亲兄弟们多是"奖励好落点"（正），这里是"罚坏落点"（负），
-            # 在 only_positive_rewards 下负项信号偏弱；若这轮仍不够，下一步是把它
-            # 改写成正奖励形式，而不是继续加大惩罚。
-            # 现在 reward fn 返回有界的 [0,1] 悬空度（0=完美贴地），符号仍在这里。
-            # -0.5 × 实测均值 0.29 ≈ -0.145，相对原始 -0.15×0.44≈-0.066 约为 2.2 倍，
-            # 正是"加码"的本意；但单步最坏惩罚从 -3.50 降到 -0.50（有界），尖峰
-            # 风险反而降了一个数量级。
+
             foothold = -0.5
 
             feet_air_time = 4.0
@@ -119,27 +98,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             tracking_lin_vel = 1.2
             tracking_ang_vel = 0.8
 
-            # 反"绕路/后退"：用按指令偏航率积分的参考朝向 yaw_ref 构造世界系
-            # 目标方向，奖励世界系实际速度/朝向对它的跟踪（仿 Extreme Parkour,
-            # arXiv:2309.14341 的 world-frame progress reward）。完全遵循三路
-            # 指令的机器人两项都拿满分，只有"未被指令的"偏航偏移（绕路转身）
-            # 或横移/后退才掉分。详见 N2PerceptiveEnv._update_world_reference。
-            #
-            # 标定值必须随 round-4 重构一起下调。旧的 5.0/2.5 是在**冻结**目标
-            # 那版上调出来的，而那版的信号实测封顶在 0.517/0.408（蒙特卡洛算出
-            # 的"完美遵循指令、绝不绕路"的机器人得分，实际策略拿到 0.434/0.388，
-            # 即该项当时只是被偏航指令饱和、对绕路零信息量）。重构后同样的 5.0/
-            # 2.5 能达到 ~2.75/2.5，是原来的 5~6 倍奖励质量，会盖过整个 stack
-            # （tracking_lin_vel 1.4 + tracking_ang_vel 1.6 满打满算才 3.0）。
-            # 1.5/1.0 让两项的可达幅值与 tracking 系列同量级，也与 Extreme
-            # Parkour 自己的 tracking_goal_vel=1.5 / tracking_yaw=0.5 一致。
-            # 判据：跑 1500~2000 iter 后这两项若明显**超过** 0.517/0.408，说明
-            # 奖励终于开始度量绕路了；同时 noise_std 应止涨（旧版 1.0→2.61 单调
-            # 上升）。
-            # 1.5 -> 0.8：_reward_world_progress 改成归一化形式后，同样的行为幅值
-            # 大约翻倍（原来返回 m/s，指令 xy 速度期望 ~0.5；现在满分恒为 1.0），
-            # 所以 scale 减半才能保持该项在 stack 里的有效权重不变。
-            # 若你在服务器上跑的是未归一化的 2.5，对应的归一化等价值约为 1.25。
+
             world_progress = 0.8
             world_heading = 1.0
 
