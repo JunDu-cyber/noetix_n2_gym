@@ -52,9 +52,14 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             height_measurements = 0.0       # privileged = 干净真值,必须为0
 
     class rewards(N2_10dof_Cfg.rewards):
-        # ε : if terrain under a sole sample sits more than this (m) below the
-        # foot, the sample is "over a void" → improper placement. (paper's ε)
+        # ε : 旧离散实现的阈值（采样点低于支撑面超过该值即判为悬空）。
+        # 已被 foothold_flat_k 的平滑形式取代，保留仅为记录当时的量纲参考。
         foothold_depth_tol = 0.04
+        # _reward_foothold 的平滑系数 k：raw = 1 - exp(-k * 平均悬空深度)。
+        # 取 20 使旧阈值 4cm 落在 1-exp(-0.8)=0.55 附近（区分度最大的中段），
+        # 实测悬空深度中位 0.015m→0.26、p99 0.098m→0.86，动态范围用满。
+        # k 越大越苛刻（对浅悬空也重罚），越小越宽容。
+        foothold_flat_k = 20.0
         # foot sole footprint used to lay out the n sample points (metres).
         # N2 "ankle" foot ~0.20 x 0.10; tune to your collision mesh.
         foot_length = 0.20
@@ -108,7 +113,11 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 注意符号差异：亲兄弟们多是"奖励好落点"（正），这里是"罚坏落点"（负），
             # 在 only_positive_rewards 下负项信号偏弱；若这轮仍不够，下一步是把它
             # 改写成正奖励形式，而不是继续加大惩罚。
-            foothold = -0.35  # sign lives here; reward fn returns +count
+            # 现在 reward fn 返回有界的 [0,1] 悬空度（0=完美贴地），符号仍在这里。
+            # -0.5 × 实测均值 0.29 ≈ -0.145，相对原始 -0.15×0.44≈-0.066 约为 2.2 倍，
+            # 正是"加码"的本意；但单步最坏惩罚从 -3.50 降到 -0.50（有界），尖峰
+            # 风险反而降了一个数量级。
+            foothold = -0.5
 
             tracking_lin_vel = 1.4
             tracking_ang_vel = 1.6
