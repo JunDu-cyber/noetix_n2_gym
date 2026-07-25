@@ -26,11 +26,6 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
         terrain_proportions = [0.0, 0.15, 0.05, 0.05, 0.0, 0.1, 0.1, 0.30, 0.25]
 
-        # 直行楼梯（index 7/8）-x 端底部平台尺寸，见 utils/terrain.py 的
-        # directional_stairs 和 N2PerceptiveEnv._reset_root_states。楼梯从这块底部
-        # 平台贯穿整块地形往 +x 升/降，机器人在平台上出生、正对整段楼梯正面爬 ——
-        # 用整块地形铺楼梯（中心出生会把可爬长度砍半、楼梯太短）。
-        stairs_platform_size = 1.5
         # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
         # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
         # 对早期楼梯太苛刻，把楼梯列钉死在 0 级。降到 1.5m 让"爬了一段真台阶"就能升级，
@@ -108,7 +103,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
             # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
             # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
-            stumble = -1.5
+            stumble = -2.5
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):
