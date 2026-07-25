@@ -351,6 +351,36 @@ class N2PerceptiveEnv(N2_10dof_Env):
         rew[self.standing_cmd] = 0.
         return rew
 
+    # ---------------- anti-freeze (break the "stand still on stairs" optimum) ----------------
+    def _reward_anti_freeze(self):
+        """Positive reward for command-aligned forward world-speed, saturating at
+        `rewards.anti_freeze_speed`.
+
+        Motivation: with only_positive_rewards=True the summed step reward is
+        clipped at 0, so a robot commanded to move but standing still sits at
+        exactly 0 -- and a climbing attempt that stumbles also clips to 0. That
+        erases the gradient favouring "move" over "freeze" on risky terrain,
+        which is why the policy climbs in Isaac yet freezes on the *same* stairs
+        in MuJoCo (verified: spawned on the stairs, commanded forward, it stands
+        with world-vx approx 0 for 30 s). A *penalty* cannot fix this -- it is
+        clipped away with everything else. So this is a POSITIVE term instead.
+
+        It saturates at anti_freeze_speed (a few cm/s), so it is NOT a speed race
+        and does not fight tracking_lin_vel: the entire reward is earned crossing
+        from 0 to anti_freeze_speed, i.e. the steepest gradient sits exactly at
+        the freeze point. Standing earns 0, any real forward motion earns up to
+        1, lifting "move" above "freeze" even after the only_positive_rewards
+        clip. Uses the same world-frame velocity / commands_world_dir projection
+        as _reward_world_progress (so retreat/detour earns nothing here either).
+        Gated off for standing_cmd envs -- they are meant to hold still, so this
+        never fights _reward_stand_still."""
+        if not hasattr(self, 'commands_world_dir'):
+            return torch.zeros(self.num_envs, device=self.device)
+        fwd_speed = torch.sum(self.root_states[:, 7:9] * self.commands_world_dir, dim=1)
+        rew = torch.clamp(fwd_speed / self.cfg.rewards.anti_freeze_speed, min=0.0, max=1.0)
+        rew[self.standing_cmd] = 0.
+        return rew
+
     # ---------------- bounded stand-still penalty ----------------
     def _reward_stand_still(self):
         """De-weighted, capped version of N2_10dof_Env._reward_stand_still.
