@@ -1,5 +1,7 @@
+import numpy as np
 import torch
-from isaacgym.torch_utils import quat_apply
+from isaacgym import gymtorch
+from isaacgym.torch_utils import quat_apply, torch_rand_float
 from humanoid.utils.math import quat_apply_yaw, wrap_to_pi
 from humanoid.envs.n2.n2_10dof_env import N2_10dof_Env
 
@@ -133,7 +135,11 @@ class N2PerceptiveEnv(N2_10dof_Env):
             return
         progress = self.world_progress_accum[env_ids]
 
-        move_up = progress > self.terrain.env_length / 2
+        # up-distance: base uses env_length/2 (2m). With center spawn on stairs that
+        # means climbing the whole upper half-tile to level up -- too steep for early
+        # stairs, which pins the stairs columns at level 0. Configurable, default 1.5m.
+        up_dist = getattr(self.cfg.terrain, 'curriculum_up_distance', self.terrain.env_length / 2)
+        move_up = progress > up_dist
         move_down = (progress < torch.norm(self.commands[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5) * ~move_up
         self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
         self.terrain_levels[env_ids] = torch.where(self.terrain_levels[env_ids] >= self.max_terrain_level,

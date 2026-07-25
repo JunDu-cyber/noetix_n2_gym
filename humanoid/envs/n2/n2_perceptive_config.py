@@ -16,9 +16,26 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
         # 初始地形等级
         max_init_terrain_level = 0 #10
-        # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
+        # 地形比例分布 [平地; 离散障碍; 均匀; 上坡; 下坡; 金字塔上楼梯; 金字塔下楼梯;
+        #              直行上楼梯; 直行下楼梯]。累加必须到 1.0：旧值只到 0.70，剩下
+        #              30% 落进 make_terrain 的 else:pass = 纯平地，既浪费环境、又把
+        #              terrain_level 均值拉高（平地列轻松升满级、掩盖楼梯列卡在低级）。
+        #              现在用离散障碍(index 1，"大大小小方块高地")替掉那 30% 空平地，
+        #              并把权重压到直行楼梯上——它是要攻克的目标地形。
+        # [平地; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]（旧 7 项注释保留供参考）
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
+        terrain_proportions = [0.0, 0.15, 0.1, 0.0, 0.0, 0.05, 0.15, 0.30, 0.25]
+
+        # 直行楼梯（index 7/8）中央平台尺寸，见 utils/terrain.py 的 add_center_platform。
+        # stairs_terrain 是没有平台的单调整片楼梯，机器人出生在块中心=半山腰某级台阶、
+        # 没助跑就要爬，实测连 2.5cm 都爬不动、一半在摔，课程因此永远卡在低级。补上
+        # 中央平台（pyramid_stairs 本来就有）让它有落脚助跑区。出生点不变、无需块间空隙。
+        stairs_platform_size = 1.5
+        # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
+        # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
+        # 对早期楼梯太苛刻，把楼梯列钉死在 0 级。降到 1.5m 让"爬了一段真台阶"就能升级，
+        # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
+        curriculum_up_distance = 1.5
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
