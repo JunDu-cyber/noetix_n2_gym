@@ -69,6 +69,13 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         stand_still_vel_weight = 0.05
         stand_still_max = 20.0
 
+        # _reward_anti_freeze 的饱和阈值（m/s）：命令方向上的世界系前进速度达到该值
+        # 即拿满该项奖励，再快不再加分。取 0.15（几 cm/s）——目的是打破"看到楼梯就
+        # 原地站死"的局部最优（only_positive_rewards 把站立总回报钳到 0，惩罚被一并
+        # 钳掉、没有梯度；正奖励且低速饱和，才能把"动"抬到"冻"之上而不变成飙速、
+        # 不跟 tracking_lin_vel 抢）。阈值越小、脱离静止的梯度越陡。
+        anti_freeze_speed = 0.15
+
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = -0.15  # sign lives here; reward fn returns +count
 
@@ -96,6 +103,13 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 上升）。
             world_progress = 2.2
             world_heading = 0.8
+
+            # 反冻结：命令要求前进却原地不动时把"动"抬到"冻"之上，破解楼梯前站死的
+            # 局部最优（见 N2PerceptiveEnv._reward_anti_freeze）。正奖励、低速饱和，
+            # 量级与 tracking_lin_vel(1.4) 同级即可，太大反而催生莽撞前冲。先给 1.0，
+            # 跑一轮看 rew_anti_freeze 是否随 terrain_level 上升而上升、且 stand_still
+            # 不反弹；若楼梯前仍犹豫可加到 1.5~2.0。
+            anti_freeze = 1.0
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
