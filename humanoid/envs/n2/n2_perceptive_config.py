@@ -16,9 +16,26 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
         # 初始地形等级
         max_init_terrain_level = 0 #10
-        # 地形比例分布 [平面; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]
+        # 地形比例分布 [平地; 离散障碍; 均匀; 上坡; 下坡; 金字塔上楼梯; 金字塔下楼梯;
+        #              直行上楼梯; 直行下楼梯]。累加必须到 1.0：旧值只到 0.70，剩下
+        #              30% 落进 make_terrain 的 else:pass = 纯平地，既浪费环境、又把
+        #              terrain_level 均值拉高（平地列轻松升满级、掩盖楼梯列卡在低级）。
+        #              现在用离散障碍(index 1，"大大小小方块高地")替掉那 30% 空平地，
+        #              并把权重压到直行楼梯上——它是要攻克的目标地形。
+        # [平地; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]（旧 7 项注释保留供参考）
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.15, 0.25, 0.15]
+        terrain_proportions = [0.0, 0.15, 0.1, 0.0, 0.0, 0.05, 0.15, 0.30, 0.25]
+
+        # 直行楼梯（index 7/8）中央平台尺寸，见 utils/terrain.py 的 add_center_platform。
+        # stairs_terrain 是没有平台的单调整片楼梯，机器人出生在块中心=半山腰某级台阶、
+        # 没助跑就要爬，实测连 2.5cm 都爬不动、一半在摔，课程因此永远卡在低级。补上
+        # 中央平台（pyramid_stairs 本来就有）让它有落脚助跑区。出生点不变、无需块间空隙。
+        stairs_platform_size = 1.5
+        # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
+        # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
+        # 对早期楼梯太苛刻，把楼梯列钉死在 0 级。降到 1.5m 让"爬了一段真台阶"就能升级，
+        # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
+        curriculum_up_distance = 1.5
 
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
@@ -60,8 +77,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         class scales(N2_10dof_Cfg.rewards.scales):
             foothold = -0.15  # sign lives here; reward fn returns +count
 
-            tracking_lin_vel = 1.2
-            tracking_ang_vel = 1.0
+            tracking_lin_vel = 1.4
+            tracking_ang_vel = 1.6
 
             # 反"绕路/后退"：用按指令偏航率积分的参考朝向 yaw_ref 构造世界系
             # 目标方向，奖励世界系实际速度/朝向对它的跟踪（仿 Extreme Parkour,
@@ -80,8 +97,8 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 判据：跑 1500~2000 iter 后这两项若明显**超过** 0.517/0.408，说明
             # 奖励终于开始度量绕路了；同时 noise_std 应止涨（旧版 1.0→2.61 单调
             # 上升）。
-            world_progress = 1.8
-            world_heading = 1.4
+            world_progress = 1.5
+            world_heading = 1.0
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
@@ -91,7 +108,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
             # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
             # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
-            stumble = -2.5
+            stumble = -1.5
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):

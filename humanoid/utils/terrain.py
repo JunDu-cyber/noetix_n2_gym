@@ -44,6 +44,29 @@ def add_roughness(terrain, noise_magnitude=0.02):
         downsampled_scale=0.075,
     )
 
+
+def add_center_platform(terrain, platform_size=1.5):
+    """在 stairs_terrain 的正中央压出一块平台，作为出生落脚区。
+
+    terrain_utils.stairs_terrain 是沿 x（轴 0）单调递增的整片楼梯、没有平台，而
+    机器人出生在地形块正中心（add_terrain_to_map: env_origin_x=(i+0.5)*env_length），
+    于是被丢在半山腰的某一级台阶上、没有助跑就要立刻爬。实测直行楼梯连 2.5cm 都
+    爬不动、一半在摔（0725_00-30-19_/model_11999，固定 0.5m/s 前进：存活 41~52%、
+    净进展 8~35%），而课程升级判据是 progress>env_length/2=2m 才升级、否则降级，
+    所以直行楼梯列被永久压在 0~1 级、机器人从没在高楼梯上训练过 —— 这是"爬不上
+    10cm"的真正根因。pyramid_stairs_terrain 之所以能爬，正是因为它有 platform_size
+    中央平台；这里给直行楼梯补上同样的东西。
+
+    做法：把中心 ±platform/2 的 x 带压平到中心那一级的高度。楼梯原本单调，所以压
+    平后 —— -x 侧是更低的台阶、中心是平台、+x 侧是更高的台阶。机器人出生在平台上，
+    前进(+x)指令有助跑再逐级往上爬，后退(-x)指令则往下走。出生点完全不动（仍是块
+    中心），只是把中心变平，所以不需要地形块之间有任何空隙（它们本就边对边紧贴，
+    没有空间放独立出生区 —— 见 add_terrain_to_map）。沿 y 恒定的性质保持不变。
+    """
+    cx = terrain.height_field_raw.shape[0] // 2
+    half = max(1, int((platform_size / terrain.horizontal_scale) / 2))
+    terrain.height_field_raw[cx - half: cx + half, :] = terrain.height_field_raw[cx, :]
+
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
 
@@ -246,9 +269,11 @@ class HumanoidTerrain(Terrain):
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[7]:
             terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height)
+            add_center_platform(terrain, getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         elif choice < self.proportions[8]:
             terrain_utils.stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height)
+            add_center_platform(terrain, getattr(self.cfg, 'stairs_platform_size', 1.5))
             add_roughness(terrain, np.random.uniform(0.01, 0.05))
         else:
             pass
