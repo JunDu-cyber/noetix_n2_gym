@@ -109,7 +109,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 量级与 tracking_lin_vel(1.4) 同级即可，太大反而催生莽撞前冲。先给 1.0，
             # 跑一轮看 rew_anti_freeze 是否随 terrain_level 上升而上升、且 stand_still
             # 不反弹；若楼梯前仍犹豫可加到 1.5~2.0。
-            anti_freeze = 1.5
+            anti_freeze = 1.0
 
             # 障碍物/楼梯通行相关：碰撞与踢竖面惩罚（原本已实现但未启用）
             # collision: 参考 legged_gym 上游 base 默认值及 anymal_c/a1 rough
