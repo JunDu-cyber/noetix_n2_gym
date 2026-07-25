@@ -32,14 +32,29 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
         curriculum_up_distance = 1.6
 
+    class commands(N2_10dof_Cfg.commands):
+        # 站立指令比例 0.20 -> 0.05。基类给了 20% 的环境"全部命令为 0"，感知爬楼
+        # 任务里这等于拿 20% 的算力专门训练"站着不动"——而 MuJoCo 复现出来的失败
+        # 模式恰恰是"一感知到楼梯就退回站立"（出生在楼梯上、给前进指令，vx≈0 站
+        # 30 秒）。站立不是它不会走，是它被训得太会站了。
+        # 参照物：IsaacLab 官方人形粗糙地形基线 Isaac-Velocity-Rough-H1-v0 用的是
+        # rel_standing_envs=0.02（2%），比这里低一个数量级。取 0.05 作为折中，既
+        # 大幅削掉这个吸引子的训练量，又保留一点站立能力（部署时仍需要能站住）。
+        standing_prob = 0.05
+
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
             height_measurements = 0.0       # privileged = 干净真值,必须为0
 
     class rewards(N2_10dof_Cfg.rewards):
-        # ε : if terrain under a sole sample sits more than this (m) below the
-        # foot, the sample is "over a void" → improper placement. (paper's ε)
+        # ε : 旧离散实现的阈值（采样点低于支撑面超过该值即判为悬空）。
+        # 已被 foothold_flat_k 的平滑形式取代，保留仅为记录当时的量纲参考。
         foothold_depth_tol = 0.04
+        # _reward_foothold 的平滑系数 k：raw = 1 - exp(-k * 平均悬空深度)。
+        # 取 20 使旧阈值 4cm 落在 1-exp(-0.8)=0.55 附近（区分度最大的中段），
+        # 实测悬空深度中位 0.015m→0.26、p99 0.098m→0.86，动态范围用满。
+        # k 越大越苛刻（对浅悬空也重罚），越小越宽容。
+        foothold_flat_k = 20.0
         # foot sole footprint used to lay out the n sample points (metres).
         # N2 "ankle" foot ~0.20 x 0.10; tune to your collision mesh.
         foot_length = 0.20
@@ -76,8 +91,28 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 不跟 tracking_lin_vel 抢）。阈值越小、脱离静止的梯度越陡。
         anti_freeze_speed = 0.15
 
+        # _reward_world_progress 归一化分母的下限（m/s）。该项现在除以指令速度
+        # （照抄 Extreme Parkour 的 tracking_goal_vel/cmd），完美遵循指令在任何
+        # 速度下都得 1.0，不再结构性惩罚"慢而稳地爬楼"。min_cmd_vel=0.2 只约束
+        # 三维指令的模长，wz 主导的指令仍可能让 |v_xy| 接近 0，故给分母兜底。
+        world_progress_min_speed = 0.1
+
         class scales(N2_10dof_Cfg.rewards.scales):
-            foothold = -0.15  # sign lives here; reward fn returns +count
+            # 落脚质量。-0.15 -> -0.35：三个"亲兄弟"项目（命令接口同为 vx/vy/wz 的
+            # 感知运动工作）在楼梯上靠的都是足部落点奖励而非世界系反绕路奖励——
+            # Limx Oli(arXiv:2512.07464) 24 个奖励项里零个 progress 项，用 feet hold /
+            # feet stair flat；PRIOR 用 terrain-adaptive footstep rewards；IsaacLab H1
+            # 只有 feet_air_time / feet_slide。实测本项当前只有 -0.025~-0.043，在整个
+            # stack 里几乎不可见，加权到 -0.35 后约 -0.06~-0.10，仍远小于正项总和
+            # (~1.5)，不会制造 only_positive_rewards 死区。
+            # 注意符号差异：亲兄弟们多是"奖励好落点"（正），这里是"罚坏落点"（负），
+            # 在 only_positive_rewards 下负项信号偏弱；若这轮仍不够，下一步是把它
+            # 改写成正奖励形式，而不是继续加大惩罚。
+            # 现在 reward fn 返回有界的 [0,1] 悬空度（0=完美贴地），符号仍在这里。
+            # -0.5 × 实测均值 0.29 ≈ -0.145，相对原始 -0.15×0.44≈-0.066 约为 2.2 倍，
+            # 正是"加码"的本意；但单步最坏惩罚从 -3.50 降到 -0.50（有界），尖峰
+            # 风险反而降了一个数量级。
+            foothold = -0.5
 
             feet_air_time = 4.0
 
@@ -101,7 +136,11 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # 判据：跑 1500~2000 iter 后这两项若明显**超过** 0.517/0.408，说明
             # 奖励终于开始度量绕路了；同时 noise_std 应止涨（旧版 1.0→2.61 单调
             # 上升）。
-            world_progress = 2.5
+            # 1.5 -> 0.8：_reward_world_progress 改成归一化形式后，同样的行为幅值
+            # 大约翻倍（原来返回 m/s，指令 xy 速度期望 ~0.5；现在满分恒为 1.0），
+            # 所以 scale 减半才能保持该项在 stack 里的有效权重不变。
+            # 若你在服务器上跑的是未归一化的 2.5，对应的归一化等价值约为 1.25。
+            world_progress = 0.8
             world_heading = 1.0
 
             # 反冻结：命令要求前进却原地不动时把"动"抬到"冻"之上，破解楼梯前站死的
@@ -119,7 +158,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             # legged_gym 里名字对不上的 feet_stumble，否则会 AttributeError）。
             # 上游没有任何参考配置启用过这一项，这里的数值是按 collision 同量级
             # 给的经验起点，需要在下一轮训练里看 TensorBoard 再调
-            stumble = -2.5
+            stumble = -2.0
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):

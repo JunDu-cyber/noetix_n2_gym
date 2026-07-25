@@ -304,7 +304,14 @@ class N2_10dof_Cfg(LeggedRobotCfg):
         heading_command = False
         # 最小命令速度
         min_cmd_vel = 0.2
-        
+
+        # 命令重采样时的特殊比例，见 N2_10dof_Env._resample_commands。
+        # 这里的默认值与改成可配置之前的硬编码常量完全一致，盲策略行为不变。
+        standing_prob = 0.20   # 全部命令置 0（站立）的比例
+        zero_vx_prob = 0.10    # 仅 vx=0 的比例
+        zero_wz_prob = 0.10    # 仅 wz=0 的比例
+
+
         class ranges:
             """命令范围配置"""
             # 线速度x方向范围 [m/s]
