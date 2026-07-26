@@ -76,7 +76,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
             foothold = -0.5
 
-            feet_air_time = 4.0
+            feet_air_time = 2.0
 
             tracking_lin_vel = 1.2
             tracking_ang_vel = 0.8
@@ -90,7 +90,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
             collision = -1.0
 
-            stumble = -2.0
+            stumble = -3.0
 
 
 class N2PerceptiveCfgPPO(N2_10dof_CfgPPO):

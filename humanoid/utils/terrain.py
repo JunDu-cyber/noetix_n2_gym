@@ -376,7 +376,7 @@ class ParkourTerrain(HumanoidTerrain):
         self._pending_goals = None
         super().__init__(cfg, num_robots)
 
-    def make_terrain(self, choice, difficulty):
+    def make_terrain(self, choice, difficulty): #TODO: add more types of terrains
         # 基类默认 terrain_length == terrain_width，把 SubTerrain 建成正方形。
         # Parkour 是长通道，必须按 add_terrain_to_map 实际写入的形状建，否则广播失败。
         terrain = terrain_utils.SubTerrain("terrain",
@@ -401,6 +401,41 @@ class ParkourTerrain(HumanoidTerrain):
             pad_height=getattr(c, 'parkour_pad_height', 0.5),
         )
         add_roughness(terrain, np.random.uniform(0.01, 0.03))
+        """
+        if choice < self.proportions[0]:
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[1]:
+            num_rectangles = 20
+            rectangle_min_size = 1.
+            rectangle_max_size = 2.
+            terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size, rectangle_max_size, num_rectangles, platform_size=3.)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[2]:
+            terrain_utils.random_uniform_terrain(terrain, min_height=-r_height, max_height=r_height, step=0.005, downsampled_scale=0.2)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[3]:
+            terrain_utils.pyramid_sloped_terrain(terrain, slope=h_slope, platform_size=0.1)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[4]:
+            terrain_utils.pyramid_sloped_terrain(terrain, slope=-h_slope, platform_size=0.1)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[5]:
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=discrete_obstacles_height, platform_size=1.)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[6]:
+            terrain_utils.pyramid_stairs_terrain(terrain, step_width=step_width, step_height=-discrete_obstacles_height, platform_size=1.)
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[7]:
+            directional_stairs(terrain, step_width, discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        elif choice < self.proportions[8]:
+            directional_stairs(terrain, step_width, -discrete_obstacles_height,
+                               getattr(self.cfg, 'stairs_platform_size', 1.5))
+            add_roughness(terrain, np.random.uniform(0.01, 0.05))
+        else:
+            pass
+        """
         return terrain
 
     def add_terrain_to_map(self, terrain, row, col):

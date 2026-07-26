@@ -3,14 +3,6 @@ from humanoid.envs.n2.n2_perceptive_config import N2PerceptiveCfg, N2PerceptiveC
 
 class N2ParkourCfg(N2PerceptiveCfg):
     """Extreme Parkour(arXiv:2309.14341)架构的配置。
-
-    独立于 n2_perceptive 注册成新任务，不动原有的感知任务——后者已经有一份能训到
-    terrain_level 5.49 的成果，不该被这次架构实验波及。
-
-    与 n2_perceptive 的三处根本差异（都是 EP 的要件）：
-      指令：只有前进速度，lin_vel_y 和 ang_vel_yaw 都是 [0,0]
-      目标：goal 路点位置，而不是速度指令方向
-      地形：中央通道 + y 向 pad + goal 落在障碍上，横向绕行被几何堵死
     """
 
     class env(N2PerceptiveCfg.env):
