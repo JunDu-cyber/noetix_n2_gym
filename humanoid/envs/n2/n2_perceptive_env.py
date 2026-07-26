@@ -70,8 +70,20 @@ class N2PerceptiveEnv(N2_10dof_Env):
                 moving = torch.norm(self.commands[ids, :3], dim=1) > self.min_cmd_vel
                 ids = ids[moving]
                 if len(ids) > 0:
-                    self.commands[ids, 0] = self.commands[ids, 0].abs().clamp(
-                        min=self.cfg.commands.stairs_min_vx)
+                    # 在 [stairs_min_vx, lin_vel_x_max] 上均匀重采样，而不是
+                    # abs().clamp(min=0.3)。两个理由，都是实测出来的：
+                    # 1) clamp 会在下限处堆出一个质量点（|vx|~U(0,0.8) 有 37.5%
+                    #    落在 0.3 以下，全被压到 0.3），等于在 30% 的环境上从第 0
+                    #    轮就强制"必须快走"。40 轮消融：min_vx=0.3 的 ep_len 只有
+                    #    5.9，关掉 forward_only 是 9.5——策略连站都没学会就被逼着
+                    #    赶路，摔得更快、更早掉进 only_positive_rewards 的死区。
+                    # 2) 下限不能取 0：|vx| 有 25% 会落到 min_cmd_vel=0.2 之下而被
+                    #    判成站立指令，把楼梯列的站立比例从 5% 抬到近 30%，正好抵消
+                    #    掉 standing_prob 的下调。0.25 刚好在 min_cmd_vel 之上。
+                    lo = self.cfg.commands.stairs_min_vx
+                    hi = max(self.command_ranges["lin_vel_x"][1], lo)
+                    self.commands[ids, 0] = torch_rand_float(
+                        lo, hi, (len(ids), 1), device=self.device).squeeze(1)
                     self.commands[ids, 1] = 0.
                     self.commands[ids, 2] = 0.
 
@@ -431,6 +443,29 @@ class N2PerceptiveEnv(N2_10dof_Env):
         rew = torch.exp(-torch.square(self.world_heading_err) * 2.0)
         rew[self.standing_cmd] = 0.
         return rew
+
+    # ---------------- bounded foot-impact penalty ----------------
+    def _reward_feet_contact_forces(self):
+        """有界版的接触力惩罚，替代基类的 sum(clip(|F| - max_contact_force, 0, inf))。
+
+        基类那版有两个问题，实测都在咬人：
+        1) 阈值 300N 低于本机器人自重（33.2kg = 325N）。单脚支撑期——正常步态里
+           一半的时间——那只脚就承受全部体重，于是"仅仅是正常走路"都在持续扣分。
+           这解释了此前对照实验里它为何是**地形无关**的（平地 -4.85 / 楼梯 -5.0）：
+           它根本不是在惩罚"踩楼梯太重"，而是一笔恒定的步态税。
+        2) 上不封顶。摔倒砸地时 |F| 轻易上千牛，单步惩罚可以盖过整个正项栈。这与
+           已经修过的 world_progress（scale 8.0 把 noise_std 从 1.0 推到 21.0）和
+           foothold（离散计数上界 12、单步 -3.5）是同一条尖峰通道。
+
+        实测发散 run 0726_10-08-30_：本项 -5.46/秒，而全部正项合计只有 +0.41/秒。
+        因为 only_positive_rewards=True 会把每步总奖励截断到 0，**每一步都被截断**，
+        奖励梯度完全消失、只剩熵项，于是 noise_std 单调爬到 2.6，机器人 400 轮都没
+        学会站住（episode 长度 ~10 步）。同期健康 run 的净值是 -0.34/秒，勉强贴在
+        截断边界上——可见这个奖励栈本来就悬在悬崖边，任何扰动都会把它推下去。
+        """
+        excess = (torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1)
+                  - self.cfg.rewards.max_contact_force).clip(min=0.)
+        return excess.clip(max=self.cfg.rewards.feet_contact_force_max_excess).sum(dim=1)
 
     # ---------------- anti-freeze (break the "stand still on stairs" optimum) ----------------
     def _reward_anti_freeze(self):
