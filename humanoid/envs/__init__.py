@@ -14,6 +14,11 @@ task_registry.register( "n2", N2Env, N2_18DofCfg(), N2_18DofCfgPPO() )
 task_registry.register( "n2_10dof", N2_10dof_Env, N2_10dof_Cfg(), N2_10dof_CfgPPO() )
 task_registry.register('n2_perceptive', N2PerceptiveEnv, N2PerceptiveCfg(), N2PerceptiveCfgPPO())
 
+# ---------------------------------------------- Parkour ----------------------------------------------
+from .n2.n2_parkour_env import N2ParkourEnv
+from .n2.n2_parkour_config import N2ParkourCfg, N2ParkourCfgPPO
+task_registry.register('n2_parkour', N2ParkourEnv, N2ParkourCfg(), N2ParkourCfgPPO())
+
 # ---------------------------------------------- Mimic ----------------------------------------------
 from .n2.n2_mimic_env import N2MimicEnv
 from .n2.n2_mimic_config import N2MimicCfg, N2MimicCfgPPO
