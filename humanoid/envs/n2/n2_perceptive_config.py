@@ -24,7 +24,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         #              并把权重压到直行楼梯上——它是要攻克的目标地形。
         # [平地; 障碍物; 均匀; 上坡; 下坡, 上楼梯, 下楼梯]（旧 7 项注释保留供参考）
         # terrain_proportions = [0.7, 0.0, 0.2, 0.1, 0.0, 0., 0.]
-        terrain_proportions = [0.0, 0.15, 0.0, 0.0, 0.0, 0.1, 0.15, 0.40, 0.2]
+        terrain_proportions = [0.0, 0.15, 0.0, 0.0, 0.0, 0.3, 0.25, 0.20, 0.1]
 
         # 课程升级所需的方向性进展阈值（m），见 N2PerceptiveEnv._update_terrain_curriculum。
         # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
