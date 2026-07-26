@@ -38,6 +38,13 @@ PLAY_TERRAIN_COL = None      # 类型列 0..num_cols-1
 PLAY_TILE_STEPS = 600        # 自动轮换时每格停留的步数
 
 
+def is_parkour(task):
+    """n2_parkour 用的是 ParkourTerrain，与 HumanoidTerrain 的地形分派规则完全不同：
+    它恒定生成 parkour_step_terrain，terrain_proportions 不起作用，所有列都是同一种
+    地形，难度只由行(台阶高度)决定。play 里凡是依赖 proportions 的地方都要分开处理。"""
+    return str(task).startswith('n2_parkour')
+
+
 def terrain_column_names(proportions, num_cols):
     """列号 -> 地形类型名。
 
@@ -85,7 +92,10 @@ def play(args):
     env_cfg.terrain.max_init_terrain_level = 5
     # 9 项，与 HumanoidTerrain.make_terrain 的新增 straight stairs 分支对齐
     # （7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8，看不到新地形）
-    env_cfg.terrain.terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
+    if not is_parkour(args.task):
+        env_cfg.terrain.terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
+    # parkour 的 terrain_proportions 是占位值，ParkourTerrain 恒定生成同一种地形，
+    # 覆盖它没有意义；列数也不必是 8——所有列一样，多留几行难度更有用。
     # env_cfg.terrain.selected = True
     # env_cfg.terrain.terrain_kwargs = {'type': 'pyramid_stairs_terrain',
     #                                   'step_width': 0.30,
@@ -126,12 +136,21 @@ def play(args):
     # 每次 reset 都会按位移改写 terrain_levels，不关掉就固定不住指定的难度行。
     env.cfg.terrain.curriculum = False
 
-    tile_names = terrain_column_names(env_cfg.terrain.terrain_proportions,
-                                      env_cfg.terrain.num_cols)
-    print('\n[play] 地形网格 %d 行(难度) x %d 列(类型):'
-          % (env_cfg.terrain.num_rows, env_cfg.terrain.num_cols))
-    for j, nm in enumerate(tile_names):
-        print('       col %d : %s' % (j, nm))
+    if is_parkour(args.task):
+        hr = getattr(env_cfg.terrain, 'parkour_step_height_range', [0.05, 0.20])
+        tile_names = ['parkour 通道(各列同型，仅随机种子不同)'] * env_cfg.terrain.num_cols
+        print('\n[play] parkour 地形 %d 行(难度=台阶高度) x %d 列(同型):'
+              % (env_cfg.terrain.num_rows, env_cfg.terrain.num_cols))
+        for i in range(env_cfg.terrain.num_rows):
+            d = i / env_cfg.terrain.num_rows
+            print('       row %d : 台阶高 %.1f cm' % (i, 100 * (hr[0] + d * (hr[1] - hr[0]))))
+    else:
+        tile_names = terrain_column_names(env_cfg.terrain.terrain_proportions,
+                                          env_cfg.terrain.num_cols)
+        print('\n[play] 地形网格 %d 行(难度) x %d 列(类型):'
+              % (env_cfg.terrain.num_rows, env_cfg.terrain.num_cols))
+        for j, nm in enumerate(tile_names):
+            print('       col %d : %s' % (j, nm))
 
     def goto_tile(row, col):
         """把机器人挪到第 row 行 / 第 col 列那一格并重置。"""
@@ -204,7 +223,12 @@ def play(args):
         # infos: 额外信息
         # _: 终止ID（此处忽略）
         # _: 终止特权观测值（此处忽略）
-        env.commands[:,0] = 1.0  # 控制x方向线速度为1.0
+        # parkour 训练时 vx 只在 [parkour_min_vx, lin_vel_x[1]] 内采样（默认 0.3~0.8），
+        # 沿用这里写死的 1.0 属于分布外外推，会让 play 的表现比实际更差。
+        if is_parkour(args.task):
+            env.commands[:, 0] = env_cfg.commands.ranges.lin_vel_x[1]
+        else:
+            env.commands[:,0] = 1.0  # 控制x方向线速度为1.0
         env.commands[:,1] = 0.0  # 控制y方向线速度为0.0
         env.commands[:,2] = 0.0  # 控制偏航角速度
         obs, _, rews, dones, infos,_,_ = env.step(actions.detach())

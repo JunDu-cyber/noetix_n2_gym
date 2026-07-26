@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from isaacgym import gymtorch
 from isaacgym.torch_utils import quat_apply, torch_rand_float
+from isaacgym import gymapi, gymutil
 from humanoid.utils.math import wrap_to_pi
 from humanoid.utils.terrain import ParkourTerrain
 from humanoid.envs.n2.n2_perceptive_env import N2PerceptiveEnv
@@ -107,7 +108,9 @@ class N2ParkourEnv(N2PerceptiveEnv):
         if len(env_ids) == 0:
             return
         lo = self.cfg.commands.parkour_min_vx
-        hi = self.command_ranges["lin_vel_x"][1]
+        # hi 兜底：play.py 的 CONTROL_ROBOT 分支会把 lin_vel_x 范围压成 [0,0]，
+        # 那样 torch_rand_float(0.3, 0.0) 会反向取到 [0, 0.3]，指令悄悄失真。
+        hi = max(self.command_ranges["lin_vel_x"][1], lo)
         self.commands[env_ids, 0] = torch_rand_float(lo, hi, (len(env_ids), 1),
                                                      device=self.device).squeeze(1)
         self.commands[env_ids, 1] = 0.
@@ -251,3 +254,25 @@ class N2ParkourEnv(N2PerceptiveEnv):
         if not hasattr(self, 'cur_goal_idx'):
             return torch.zeros(self.num_envs, device=self.device)
         return (self.cur_goal_idx > 0).float() * 0.  # 由 config scale 控制，默认关闭
+
+    # ---------------- debug 可视化：把 goal 画出来 ----------------
+    def _draw_debug_vis(self):
+        """在基类的高度图散点之外，额外画出本块地形的 goal 路点。
+
+        Parkour 的行为完全由"当前 goal 在哪"决定，看不到 goal 就没法判断机器人是
+        在朝目标走还是在乱走——这是 play 里最需要的一条信息。
+        绿色小球 = 还没到的 goal，红色大球 = 当前正在追的那个。
+        """
+        super()._draw_debug_vis()
+        if self.viewer is None or not hasattr(self, 'cur_goal_idx'):
+            return
+        goals = self._env_goals()          # (N, num_goals, 3)
+        pending = gymutil.WireframeSphereGeometry(0.08, 6, 6, None, color=(0, 1, 0))
+        current = gymutil.WireframeSphereGeometry(0.16, 8, 8, None, color=(1, 0, 0))
+        for i in range(self.num_envs):
+            gi = int(self.cur_goal_idx[i])
+            g = goals[i].cpu().numpy()
+            for k in range(g.shape[0]):
+                geom = current if k == gi else pending
+                pose = gymapi.Transform(gymapi.Vec3(g[k, 0], g[k, 1], g[k, 2] + 0.05), r=None)
+                gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[i], pose)
