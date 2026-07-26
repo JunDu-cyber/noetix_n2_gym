@@ -276,3 +276,48 @@ class N2ParkourEnv(N2PerceptiveEnv):
                 geom = current if k == gi else pending
                 pose = gymapi.Transform(gymapi.Vec3(g[k, 0], g[k, 1], g[k, 2] + 0.05), r=None)
                 gymutil.draw_lines(geom, self.gym, self.viewer, self.envs[i], pose)
+
+    # ---------------- 步态：堵住"单腿拖行"这个局部最优 ----------------
+    def _reward_feet_air_time(self):
+        """每只脚独立计腾空时长后相加，不再对两脚取 min（方案 A）。
+
+        基类版本：
+            in_mode_time = where(in_contact, feet_contact_time, feet_air_time)
+            rew = min(where(single_stance, in_mode_time, 0), dim=1)
+        它对两脚的 in-mode 时间取 min，而拖地脚【永远在接触】，它的 in_mode_time 是
+        一路增长的 contact_time，min 于是总是取到摆动脚的 air_time —— "一只脚永远
+        贴地 + 另一只脚迈步"因此拿到和真正交替迈步一样的满分。实测 model_999：
+        左脚触地 80.2%、右脚 22.5%，不对称度 0.578，而该项照样给到 0.06~0.07。
+
+        改法：只认【每只脚自己最近一次完整腾空的时长】，两脚各自封顶后相加再乘 0.5，
+        使上限与基类的 0.5 一致。拖地脚从不腾空、last_air_time 恒为 0，贡献为零，
+        整项直接少一半；真正交替的步态两脚都有腾空，不受影响。
+
+        注意不能简单把 min 换成 sum：那样拖地脚的 contact_time 会被当作"in-mode
+        时间"越滚越大，反而把拖行奖励成最优解。
+        """
+        contact_filt = torch.logical_or(self.contacts, self.last_contacts)
+        if not hasattr(self, 'last_air_time'):
+            self.last_air_time = torch.zeros_like(self.feet_air_time)
+
+        self.feet_air_time += self.dt
+        self.feet_contact_time += self.dt
+        # 落地瞬间把刚刚完成的腾空时长记下来（此后该脚 air_time 归零）
+        touchdown = contact_filt & (self.feet_air_time > 0)
+        self.last_air_time = torch.where(touchdown, self.feet_air_time, self.last_air_time)
+        self.feet_air_time *= ~contact_filt
+        self.feet_contact_time *= contact_filt
+
+        # 时效性：last_air_time 只在落地那一刻更新，若不清理，一只脚哪怕十秒没抬过
+        # 也还在吃十秒前那次的信用。实测坏策略上左脚（80.2% 时间贴地）的
+        # last_air_time 是 0.0196s、右脚 0.0197s，几乎相等——A 的"拖地脚贡献为零"
+        # 因此没有兑现。这里规定：单只脚连续触地超过 stale_time 就判定它已经不再
+        # 迈步，信用清零。正常步态的支撑相远短于该阈值，不受影响。
+        stale = self.feet_contact_time > self.cfg.rewards.feet_air_time_stale
+        self.last_air_time = torch.where(stale, torch.zeros_like(self.last_air_time),
+                                         self.last_air_time)
+
+        single_stance = torch.sum(contact_filt.int(), dim=1) == 1
+        per_foot = torch.clamp(self.last_air_time, max=0.5)
+        rew = 0.5 * torch.sum(per_foot, dim=1) * single_stance
+        return rew

@@ -79,6 +79,9 @@ class N2ParkourCfg(N2PerceptiveCfg):
     class rewards(N2PerceptiveCfg.rewards):
         # goal 到达半径(m)：进到这个范围内就切换到下一个 goal
         goal_reach_dist = 0.4
+        # _reward_feet_air_time：单只脚连续触地超过这么久(s)就判定"已不再迈步"，
+        # 把它上一次的腾空信用清零。正常支撑相约 0.3~0.6s，取 1.0s 留余量。
+        feet_air_time_stale = 1.0
 
         class scales(N2PerceptiveCfg.rewards.scales):
             # ---- EP 的两项核心，权重取自 EP 自己的配置 ----
@@ -92,6 +95,18 @@ class N2ParkourCfg(N2PerceptiveCfg):
             world_progress = 0.0
             world_heading = 0.0
             anti_freeze = 0.0
+
+            # ---- 步态：堵住单腿拖行 ----
+            # contact_no_vel 罚的是"带速度的接触"，也就是拖蹭。它一直在罚，只是
+            # 太小：实测坏掉的 model_999 上只有 -0.004/步，占正项合计的 5.1%，
+            # 完全压不住。x5 提到 -10 后约占 26%，是能起作用又不至于把总奖励压到
+            # only_positive_rewards 截断线以下的量级（x10 就到 51%，太激进，
+            # perceptive 上吃过这个亏）。
+            # 要说明的是它【不区分左右】：实测拖地脚占该项 53%、摆动脚 47%，
+            # 因为摆动脚在触地/蹬离瞬间同样有带速度的接触。所以这一项不是
+            # 对称性药方，而是把"拖蹭"整体变贵、推动两脚都干净落地。
+            # 真正打击不对称的是上面改过的 feet_air_time（拖地脚贡献归零）。
+            contact_no_vel = -6
 
             # ---- base 系速度跟踪降权 ----
             # EP 保留但次要；主目标已经由 tracking_goal_vel 承担
