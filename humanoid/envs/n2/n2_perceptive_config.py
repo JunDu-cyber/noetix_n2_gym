@@ -79,6 +79,17 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 的指令，机器人贴着楼梯磨蹭也算"服从"，课程照样上不去。
         stairs_min_vx = 0.3
 
+    class domain_rand(N2_10dof_Cfg.domain_rand):
+        # 关掉"每次 reset 重抽摩擦/恢复系数"。实测（1024 env）不含 reset 的步
+        # 52.7ms、含 reset 的步 296.8ms，而训练早期 episode 只有十几步、几乎每步
+        # 都有环境在 reset，于是 _refresh_actor_rigid_shape_props 的 per-env
+        # Python 循环吃掉了大部分采样时间（服务器上表现为 1884 steps/s、52s 一轮）。
+        # 建环境时的 per-env 摩擦随机化（_process_rigid_shape_props，上游 legged_gym
+        # 的做法）依旧生效，4096 个环境仍各自持有取自 256 个 bucket 的不同摩擦，
+        # 策略看到的摩擦分布不变；失去的只是"同一环境跨 episode 更换摩擦"。
+        # 只覆盖 perceptive，盲策略保持原行为。
+        refresh_shape_props_on_reset = False
+
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
             height_measurements = 0.0       # privileged = 干净真值,必须为0
