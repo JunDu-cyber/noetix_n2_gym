@@ -30,7 +30,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 基类是 env_length/2=2m；配合中心出生，2m 意味着要爬完整个上半块楼梯才升级，
         # 对早期楼梯太苛刻，把楼梯列钉死在 0 级。降到 1.5m 让"爬了一段真台阶"就能升级，
         # 课程得以逐级把机器人推上更高楼梯。若仍卡住可再调低。
-        curriculum_up_distance = 1.6
+        curriculum_up_distance = 3.2
 
         # 地形块 4m -> 8m，与"亲兄弟"对齐：legged_gym 用 terrain_length/width = 8.，
         # IsaacLab 的 ROUGH_TERRAINS_CFG 也是 8m 块。4m 块下 directional_stairs 去掉
