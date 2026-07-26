@@ -235,7 +235,10 @@ class _OnnxPolicyExporter(torch.nn.Module):
 
     def export(self, path, filename):
         self.to("cpu")
-        obs = torch.zeros(1, self.actor[0].in_features)
+        # 同上：actor 可能是 ScanEncoderActor，用第一个 Linear 的 in_features。
+        first = next(m for m in self.actor.modules() if isinstance(m, torch.nn.Linear))
+        in_dim = getattr(self.actor, 'expected_input_dim', None) or first.in_features
+        obs = torch.zeros(1, in_dim)
         torch.onnx.export(
                 self,
                 obs,

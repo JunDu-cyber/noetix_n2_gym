@@ -38,6 +38,9 @@ class ScanEncoderActor(nn.Module):
         self.n_proprio = int(n_proprio)
         self.n_scan = int(n_scan)
         self.single_obs = self.n_proprio + self.n_scan
+        # ONNX 导出要知道真实输入维度；此时第一个 Linear 是编码器的，其 in_features
+        # 只有 scan 部分，会算错，所以显式暴露。
+        self.expected_input_dim = self.single_obs * self.frame_stack
 
         enc = []
         d = self.n_scan * self.frame_stack
@@ -223,7 +226,9 @@ class ActorCritic(nn.Module):
         :param observations: 当前观测状态
         """
         # 将观测数据移动到与网络相同的设备上
-        observations = observations.to(self.actor[0].weight.device)
+        # 不用 self.actor[0]：启用 scan encoder 时 actor 是 ScanEncoderActor 而非
+        # nn.Sequential，不能下标访问。取任意一个参数的 device 即可。
+        observations = observations.to(next(self.actor.parameters()).device)
         # 计算动作均值
         mean = self.actor(observations)
         # 计算动作标准差
