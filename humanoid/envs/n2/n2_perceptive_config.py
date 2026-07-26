@@ -17,11 +17,12 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # [平地;离散障碍;均匀;上坡;下坡;金字塔上/下楼梯;直行上/下楼梯]，累加须为 1.0。
         # 不足 1.0 的部分会落进 make_terrain 的 else:pass 变成纯平地，既浪费环境又把
         # terrain_level 均值拉高(平地列轻松满级、掩盖楼梯列卡在低级)。
-        terrain_proportions = [0.0, 0.15, 0.0, 0.0, 0.0, 0.05, 0.15, 0.40, 0.25]
+        terrain_proportions = [0.0, 0.15, 0.0, 0.0, 0.0, 0.3, 0.25, 0.20, 0.1]
 
-        # 课程升级所需的方向性进展(m)。基类是 env_length/2，配合中心出生对早期楼梯
-        # 过于苛刻，会把楼梯列钉死在 0 级。
-        curriculum_up_distance = 1.6
+        # 课程升级所需的方向性进展(m)，见 N2PerceptiveEnv._update_terrain_curriculum。
+        # 太小会让"走两步"就升级、课程虚高；太大配合中心出生对早期楼梯过于苛刻，
+        # 会把楼梯列钉死在 0 级。
+        curriculum_up_distance = 3.2
 
         # 8m 块，与 legged_gym / IsaacLab 对齐。4m 块下 directional_stairs 扣掉平台只剩
         # 2.5m 可爬段，课程没有上推空间。只覆盖 perceptive，盲策略仍是 4m。
@@ -122,7 +123,7 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
             world_heading = 1.0
 
             # 与 tracking_lin_vel 同量级即可，太大会催生莽撞前冲。
-            anti_freeze = 1.0
+            anti_freeze = 0.7
 
             collision = -1.0
             # key 必须是 stumble，不是 legged_gym 里名字对不上的 feet_stumble

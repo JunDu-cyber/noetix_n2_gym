@@ -58,8 +58,8 @@ class N2ParkourCfg(N2PerceptiveCfg):
     class commands(N2PerceptiveCfg.commands):
         # 本任务整体只发前进指令，不需要按地形列区分。
         stairs_forward_only = False
-        # EP 不发站立指令。
-        standing_prob = 0.0
+        # EP 完全不发站立指令；这里留一点点，其余时间在通道里前进。
+        standing_prob = 0.02
         zero_vx_prob = 0.0
         zero_wz_prob = 0.0
         # 前进速度下限(m/s)

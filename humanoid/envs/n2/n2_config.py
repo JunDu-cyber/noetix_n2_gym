@@ -269,7 +269,7 @@ class N2_18DofCfg(LeggedRobotCfg):
             feet_air_time = 2.
             default_joint_pos = 1.0
             default_up_joint_pos = 1.1 #0.5
-            feet_clearance = 0.01
+            #feet_clearance = 0.01
             
             # 接触奖励
             feet_contact = 1.0
