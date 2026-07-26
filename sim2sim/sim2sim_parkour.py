@@ -34,6 +34,79 @@ from sim2sim_perceptive import (
 )
 
 
+class Carrot:
+    """键盘牵引的目标点，活在一个【半绑定坐标系】里：原点跟着机器人平移，
+    但坐标轴不跟机器人旋转（始终与世界系同向）。
+
+    carrot_world = base_xy + offset_world，方向键改的是 offset_world。
+
+    为什么是这个坐标系，而不是另外两种：
+
+      体坐标系绑定（跟着转）—— 错。Δψ 恒等于你设的转向角，机器人怎么转都不变，
+        完全没有反馈，退化成一个常数输入。
+
+      纯世界系锚定（完全不跟）—— 也不好。机器人会一路逼近目标点，距离不断缩小，
+        必须在进入 reach 时把它往前挪一截才能继续牵引；而这一挪就是观测里的
+        【跳变】：Δψ 和距离瞬间不连续，等于给策略灌一个阶跃。走过头之后方位角
+        还会直接翻 180 度。
+
+      半绑定（跟平移、不跟旋转）—— 本实现。机器人永远追不上，不需要任何前移
+        修正，所以观测连续；而它一旦转头，Δψ = 期望世界航向 − 当前偏航 立刻变化，
+        纠偏反馈完整保留。
+
+    代价要说清楚：因为目标点跟着机器人平移，【横向漂移不再自动被惩罚】——训练时
+    goal 是世界固定的，侧移会让目标方向转回来，这一项在半绑定下没有了。换来的是
+    观测连续性和可遥控性。要复现训练时的严格语义，用 goal_mode=waypoints。
+
+    按键：
+      ← / →      offset 的世界系 y 增/减（转向）
+      ↑ / ↓      offset 的世界系 x 增/减（拉远/拉近）
+      Home/End   整体拉远 / 拉近（沿当前 offset 方向缩放）
+      Insert/F1  把 offset 重置为"当前朝向正前方 lookahead 米"（只取一次 yaw，
+                 此后就是世界系常量，不再跟着转）
+    """
+
+    def __init__(self, lookahead=1.5, step=0.15):
+        self.offset = None          # 世界系 (dx, dy)，相对机器人当前位置
+        self.lookahead = lookahead
+        self.step = step
+        self._pending = []          # 待处理按键，避免回调线程直接改状态
+
+    def on_press(self, key):
+        self._pending.append(key)
+
+    def _apply(self, yaw):
+        while self._pending:
+            k = self._pending.pop(0)
+            if self.offset is None:
+                self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+            if k == Key.left:      self.offset[1] += self.step
+            elif k == Key.right:   self.offset[1] -= self.step
+            elif k == Key.up:      self.offset[0] += self.step
+            elif k == Key.down:    self.offset[0] -= self.step
+            elif k in (Key.home, Key.end):
+                n = np.linalg.norm(self.offset)
+                if n > 1e-6:
+                    scale = (n + (0.1 if k == Key.home else -0.1)) / n
+                    self.offset = self.offset * max(scale, 0.05)
+            elif k in (Key.insert, Key.f1):
+                # 只在此刻取一次 yaw，之后 offset 就是世界系常量
+                self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+            else:
+                continue
+            print("[carrot] offset=(%+.2f, %+.2f) 世界系  |offset|=%.2f m"
+                  % (self.offset[0], self.offset[1], np.linalg.norm(self.offset)))
+
+    def update(self, base_xy, yaw, reach, model, data):
+        """返回胡萝卜的世界坐标 (x, y, z)。reach 参数保留只为签名统一，此模式不用。"""
+        if self.offset is None:
+            self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+        self._apply(yaw)
+        pos = base_xy + self.offset
+        z = terrain_height_at(model, data, pos[None, :])[0]
+        return np.array([pos[0], pos[1], z])
+
+
 def build_goals(model, data, start_xy, cfg):
     """生成 goal 路点。
 
@@ -59,7 +132,7 @@ def build_goals(model, data, start_xy, cfg):
     return np.stack([xs, ys, z], axis=-1)
 
 
-def run_mujoco(cfg_name, command):
+def run_mujoco(cfg_name, command, carrot=None):
     with open(f"{LEGGED_GYM_ROOT_DIR}/sim2sim/configs/{cfg_name}", "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -87,6 +160,7 @@ def run_mujoco(cfg_name, command):
     measured_points_x = config["measured_points_x"]
     measured_points_y = config["measured_points_y"]
     goal_reach_dist = float(config.get("goal_reach_dist", 0.5))
+    goal_mode = config.get("goal_mode", "waypoints")   # waypoints | carrot
     debug_viz = bool(config.get("debug_viz", True))
     tau_limit = np.array(config["tau_limit"], dtype=np.float32) if "tau_limit" in config else None
 
@@ -108,9 +182,15 @@ def run_mujoco(cfg_name, command):
     data.qpos[7:] = default_dof_pos
     mujoco.mj_step(model, data)
 
-    goals = build_goals(model, data, data.qpos[:2].copy(), config)
-    cur_goal = 0
-    print(f"[parkour] 生成 {len(goals)} 个 goal 路点，x 从 {goals[0,0]:.2f} 到 {goals[-1,0]:.2f} m")
+    if goal_mode == "carrot":
+        goals = None
+        cur_goal = 0
+        print("[parkour] goal_mode=carrot —— 用方向键牵引目标点")
+        print("          <-/->  左右挪   ^/v  前后挪   Home/End  调 lookahead   Insert/F1  对齐正前方")
+    else:
+        goals = build_goals(model, data, data.qpos[:2].copy(), config)
+        cur_goal = 0
+        print(f"[parkour] goal_mode=waypoints —— {len(goals)} 个路点，x 从 {goals[0,0]:.2f} 到 {goals[-1,0]:.2f} m")
     print(f"[parkour] 到达半径 {goal_reach_dist} m")
 
     viewer = mujoco_viewer.MujocoViewer(model, data)
@@ -127,14 +207,19 @@ def run_mujoco(cfg_name, command):
         dq = dq[-num_actions:]
 
         if count_lowlevel % control_decimation == 0:
-            # ---- goal 推进：复刻 N2ParkourEnv._update_goals ----
-            to_goal = goals[cur_goal, :2] - base_xyz[:2]
-            if np.linalg.norm(to_goal) < goal_reach_dist and cur_goal < len(goals) - 1:
-                cur_goal += 1
-                reached += 1
-                to_goal = goals[cur_goal, :2] - base_xyz[:2]
             # 自身偏航（与 get_height_scan 里一致：仅取 yaw 分量）
             yaw = 2.0 * math.atan2(quat[2], quat[3])
+            if goal_mode == "carrot":
+                cur_xyz = carrot.update(base_xyz[:2].copy(), yaw, goal_reach_dist, model, data)
+                to_goal = cur_xyz[:2] - base_xyz[:2]
+            else:
+                # ---- goal 推进：复刻 N2ParkourEnv._update_goals ----
+                to_goal = goals[cur_goal, :2] - base_xyz[:2]
+                if np.linalg.norm(to_goal) < goal_reach_dist and cur_goal < len(goals) - 1:
+                    cur_goal += 1
+                    reached += 1
+                    to_goal = goals[cur_goal, :2] - base_xyz[:2]
+                cur_xyz = goals[cur_goal]
             target_yaw = math.atan2(to_goal[1], to_goal[0])
             dpsi = math.atan2(math.sin(target_yaw - yaw), math.cos(target_yaw - yaw))
 
@@ -164,7 +249,9 @@ def run_mujoco(cfg_name, command):
             target_q = action * action_scale + default_dof_pos
 
             if step % 500 == 0:
-                print(f"  x={base_xyz[0]:.2f} z={base_xyz[2]:.2f} goal={cur_goal}/{len(goals)-1} "
+                tgt = ("carrot(%.2f,%.2f)" % (cur_xyz[0], cur_xyz[1])) if goal_mode == "carrot" \
+                      else ("goal %d/%d" % (cur_goal, len(goals) - 1))
+                print(f"  x={base_xyz[0]:.2f} z={base_xyz[2]:.2f} {tgt} "
                       f"dpsi={math.degrees(dpsi):+.0f}deg vx={v[0]:+.2f}")
 
         tau = pd_control(target_q, q, kps, np.zeros(num_actions, dtype=np.double), dq, kds)
@@ -177,20 +264,20 @@ def run_mujoco(cfg_name, command):
             for px, py, pz in height_marker_world:
                 viewer.add_marker(pos=[px, py, pz], size=[0.02, 0.02, 0.02],
                                   rgba=[1, 1, 0, 1], type=mujoco.mjtGeom.mjGEOM_SPHERE, label="")
-            # goal 路点：绿色=未到，红色大球=当前目标（与 play.py 的配色一致）
-            for gi, g in enumerate(goals):
-                if gi < cur_goal:
-                    continue
-                is_cur = (gi == cur_goal)
-                viewer.add_marker(pos=[g[0], g[1], g[2] + 0.08],
-                                  size=[0.12, 0.12, 0.12] if is_cur else [0.05, 0.05, 0.05],
-                                  rgba=[1, 0, 0, 1] if is_cur else [0, 1, 0, 0.6],
-                                  type=mujoco.mjtGeom.mjGEOM_SPHERE, label="")
+            # 目标可视化：红色大球=当前目标（与 play.py 配色一致），绿色小球=后续路点
+            viewer.add_marker(pos=[cur_xyz[0], cur_xyz[1], cur_xyz[2] + 0.08],
+                              size=[0.12, 0.12, 0.12], rgba=[1, 0, 0, 1],
+                              type=mujoco.mjtGeom.mjGEOM_SPHERE, label="")
+            if goals is not None:
+                for g in goals[cur_goal + 1:]:
+                    viewer.add_marker(pos=[g[0], g[1], g[2] + 0.08], size=[0.05, 0.05, 0.05],
+                                      rgba=[0, 1, 0, 0.6], type=mujoco.mjtGeom.mjGEOM_SPHERE, label="")
         viewer.render()
         count_lowlevel += 1
 
     viewer.close()
-    print(f"\n[parkour] 结束：到达 {reached} 个 goal，最终 x={data.qpos[0]:.2f} z={data.qpos[2]:.2f}")
+    tail = f"到达 {reached} 个 goal，" if goals is not None else ""
+    print(f"\n[parkour] 结束：{tail}最终 x={data.qpos[0]:.2f} z={data.qpos[2]:.2f}")
 
 
 if __name__ == '__main__':
@@ -199,9 +286,20 @@ if __name__ == '__main__':
     parser.add_argument("--config_file", type=str, default="n2_parkour.yaml",
                         help="config file name in sim2sim/configs")
     args = parser.parse_args()
+    with open(f"{LEGGED_GYM_ROOT_DIR}/sim2sim/configs/{args.config_file}") as f:
+        _cfg = yaml.load(f, Loader=yaml.FullLoader)
+    mode = _cfg.get("goal_mode", "waypoints")
+
     command = cmd()
-    # parkour 训练时 vy/wz 恒为 0，这里也只让前进速度可调；默认给训练范围上限
-    command.cmd[:] = [0.8, 0.0, 0.0]
-    listener = Listener(on_press=command.cmd_swtich)
+    # parkour 训练时 vy/wz 恒为 0，前进速度固定给训练范围上限；方向由目标点决定
+    command.cmd[:] = [float(_cfg.get("ranges_lin_vel_x_max", 0.8)), 0.0, 0.0]
+
+    carrot = None
+    if mode == "carrot":
+        carrot = Carrot(lookahead=float(_cfg.get("carrot_lookahead", 1.5)),
+                        step=float(_cfg.get("carrot_step", 0.15)))
+        listener = Listener(on_press=carrot.on_press)      # 方向键牵胡萝卜
+    else:
+        listener = Listener(on_press=command.cmd_swtich)   # 方向键调速度指令
     listener.start()
-    run_mujoco(args.config_file, command)
+    run_mujoco(args.config_file, command, carrot)
