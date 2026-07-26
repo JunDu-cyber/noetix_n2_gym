@@ -118,3 +118,21 @@ class N2ParkourCfgPPO(N2PerceptiveCfgPPO):
     class runner(N2PerceptiveCfgPPO.runner):
         experiment_name = 'n2_parkour'
         empirical_normalization = True
+
+    class policy(N2PerceptiveCfgPPO.policy):
+        # 主干 [256,128] -> [512,256,128]，与 Extreme Parkour / legged_gym 上游一致。
+        # 我们的输入维度(1370)本来就比 EP 的还大，却用了更小的网络，容量与输入规模
+        # 明显不匹配。
+        actor_hidden_dims = [512, 256, 128]
+        critic_hidden_dims = [512, 256, 128]
+
+        # 高度图编码器：把 frame_stack x 96 = 960 维高度图先压到 32 维再与本体感知
+        # 拼接（EP 的 scan_encoder 是 [128,64,32]，把 132 维 scandots 压到 32）。
+        # 不启用时 actor 第一层是 1370x256=350720，占 actor 参数的 91%；启用后主干
+        # 输入降到 41x10+32=442。
+        scan_encoder_dims = [128, 64, 32]
+        # 观测布局（必须与 N2ParkourEnv.compute_observations 一致）：
+        # 每帧 = [cmd3+angvel3+grav3+dofpos10+dofvel10+act10+goal2 = 41] + [高度96]
+        frame_stack = 10
+        n_proprio = 41
+        n_scan = 96
