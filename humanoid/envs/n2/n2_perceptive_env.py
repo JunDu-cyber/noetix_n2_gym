@@ -49,8 +49,45 @@ class N2PerceptiveEnv(N2_10dof_Env):
         super()._resample_commands(env_ids)
         if len(env_ids) == 0:
             return
+
+        # ---- B：楼梯列把指令限制到该地形的可穿越轴 (+x) ----
+        # directional_stairs 沿 y 完全恒定，只在 x 方向有台阶。而基类发的是全向随机
+        # 指令，实测只有 50% 指向 +x、真正正面爬楼(cx>0.7)的仅 35%，其余时间这块
+        # 楼梯地形在教平地走路。更致命的是 vx~U(-0.8,0.8) 关于 0 对称，完美服从指令
+        # 的机器人整个 episode 的净 x 位移期望为 0（实测均值 -0.01m / 中位数 0.00m），
+        # 于是"按穿越轴计分"的课程(C)单独用会让楼梯列 40% 升级 / 60% 降级、永久钉死。
+        # 所以 B 是 C 的必要前提：指令方向必须先偏向 +x，C 才有意义。
+        # 形式上等同 Extreme Parkour 在其定向 parkour 地形上的做法
+        # （lin_vel_y=[0,0]、ang_vel_yaw=[0,0]，只留前进速度）。
+        # wz 也置零：yaw_ref 积分 wz，若允许偏航，commands_world_dir 会在段内转离
+        # +x，B 建立的对齐当场失效。
+        # 只影响 index 7/8 的楼梯列；离散方块/金字塔列仍是完整的全向指令。
+        if getattr(self.cfg.commands, 'stairs_forward_only', False):
+            on_stairs = self._stairs_env_mask()[env_ids]
+            if torch.any(on_stairs):
+                ids = env_ids[on_stairs]
+                # 站立指令保持站立（不把它强行变成前进），与基类语义一致
+                moving = torch.norm(self.commands[ids, :3], dim=1) > self.min_cmd_vel
+                ids = ids[moving]
+                if len(ids) > 0:
+                    self.commands[ids, 0] = self.commands[ids, 0].abs().clamp(
+                        min=self.cfg.commands.stairs_min_vx)
+                    self.commands[ids, 1] = 0.
+                    self.commands[ids, 2] = 0.
+
         forward = quat_apply(self.root_states[env_ids, 3:7], self.forward_vec[env_ids])
         self.yaw_ref[env_ids] = torch.atan2(forward[:, 1], forward[:, 0])
+
+    def _stairs_env_mask(self):
+        """每个环境是否位于直行楼梯列（terrain_proportions 的 index 7/8）。
+
+        非课程地形（plane / selected，没有 terrain_types）时全 False，B/C 自动失效，
+        play 和盲策略路径都不受影响。"""
+        if not hasattr(self, 'terrain_types'):
+            return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        if not hasattr(self, 'stairs_tile'):
+            self.stairs_tile = self._stairs_tile_mask()
+        return self.stairs_tile[self.terrain_types]
 
     def _init_world_progress_buffers(self):
         self.yaw_ref = torch.zeros(self.num_envs, device=self.device)
@@ -105,8 +142,22 @@ class N2PerceptiveEnv(N2_10dof_Env):
         # bookkeeping of rounds 2-3, whose whole bug class (progress made under
         # an earlier command being erased by a later one) simply cannot occur
         # when each step is credited against the direction in force that step.
-        self.world_progress_accum += torch.sum(
-            self.root_states[:, 7:9] * self.commands_world_dir, dim=1) * self.dt
+        prog = torch.sum(self.root_states[:, 7:9] * self.commands_world_dir, dim=1)
+
+        # ---- C：楼梯列只按地形的可穿越轴 (+x 世界系) 计分 ----
+        # directional_stairs 沿 y 恒定，所以"沿 commands_world_dir 的进展"在楼梯列上
+        # 并不等于"穿越了这块地形"：沿 y 走 3 秒（纯平地、一级台阶不碰）就能满足
+        # 1.6m 的升级阈值。改成只累加世界系 x 位移后，课程衡量的才是真实穿越。
+        # 与 B 配套：B 已把楼梯列的指令压到 +x，二者在正常情况下重合；C 额外挡住的是
+        # 机器人**物理上**转向的情形——即使 wz 指令为 0，实际偏航仍会漂移，而 yaw_ref
+        # 的泄漏钳制会跟着被拖走、让 commands_world_dir 转离 +x。那正是"转弯绕路"本身，
+        # C 保证这种情况下课程不给分。
+        # 对称地形（金字塔/离散方块）不做此替换：在那里任意方向的进展本来就等于穿越
+        # 等高线，原始的 commands_world_dir 投影已经是正确的度量。
+        on_stairs = self._stairs_env_mask()
+        prog = torch.where(on_stairs, self.root_states[:, 7], prog)
+
+        self.world_progress_accum += prog * self.dt
 
     def reset_idx(self, env_ids):
         # super() runs _update_terrain_curriculum first, which consumes

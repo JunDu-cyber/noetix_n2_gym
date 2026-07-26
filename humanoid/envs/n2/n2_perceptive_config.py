@@ -65,6 +65,20 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 大幅削掉这个吸引子的训练量，又保留一点站立能力（部署时仍需要能站住）。
         standing_prob = 0.05
 
+        # ---- 路线 B：只在直行楼梯列(index 7/8)把指令锁到 +x ----
+        # 起因：directional_stairs 沿 y 完全恒定，是【定向地形】，而基类发【全向随机
+        # 指令】——这两者互斥。四个亲兄弟没有一个用这个组合：legged_gym / IsaacLab /
+        # Oli 都是"对称地形(金字塔) + 全向指令"，Extreme Parkour / Robot Parkour 是
+        # "定向地形 + 定向指令(lin_vel_y=[0,0], ang_vel_yaw=[0,0])"。我们落在了
+        # 错配的那一格，症状就是楼梯列升级了却没学会爬、高台阶上转弯绕路。
+        # 这里让楼梯列进入 Parkour 的那一格：vx 取正、vy=0、wz=0。
+        # 其余列（离散方块、金字塔）完全不受影响，仍是全向指令——部署需要的横移/
+        # 偏航能力在那些列上照常训练。
+        stairs_forward_only = True
+        # 楼梯列上前进速度的下限（m/s）。|vx| 服从 U(0,0.8)，不设下限会有大量接近 0
+        # 的指令，机器人贴着楼梯磨蹭也算"服从"，课程照样上不去。
+        stairs_min_vx = 0.3
+
     class noise(N2_10dof_Cfg.noise):
         class noise_scales(N2_10dof_Cfg.noise.noise_scales):
             height_measurements = 0.0       # privileged = 干净真值,必须为0
