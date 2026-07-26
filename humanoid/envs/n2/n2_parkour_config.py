@@ -86,7 +86,19 @@ class N2ParkourCfg(N2PerceptiveCfg):
 
         class scales(N2PerceptiveCfg.rewards.scales):
             # ---- EP 的两项核心，权重取自 EP 自己的配置 ----
-            tracking_goal_vel = 1.5     # EP: tracking_goal_vel = 1.5
+            # 1.5 -> 4.0。实测 model_600（速度 0.228 m/s、净进展仅 0.08~0.12 m/s）的
+            # 每步奖励分解：正项合计 0.0861，其中【站着不动就能拿的】占 0.0701（81%）——
+            # default_joint_pos 0.0194 + feet_contact 0.0189 + orientation 0.0174 +
+            # tracking_yaw 0.0093 + tracking_ang_vel 0.0051。而 tracking_goal_vel 只有
+            # 0.0103，因为它的 raw 只拿到 0.039/1.0。
+            # 最刺眼的一对：tracking_yaw 站着朝向 goal 就拿 95%，tracking_goal_vel 只有 4%，
+            # 两者最终贡献几乎相同。策略于是收敛到"站稳、朝向 goal、极慢挪动"——正是
+            # arXiv:2010.04304 描述的 standing-still 局部最优（"balances but never steps
+            # forward"）。iter 640 时 ep_len 已达上限的 93%、noise_std 降到 0.709，
+            # 说明它对这套不动的策略非常自信，继续训不会自行好转。
+            # 4.0 使满速时该项 0.08/步 = 姿态项的 114%，让"朝 goal 前进"成为主导目标；
+            # 该项有界 [-1,1]，最坏单步 -0.08，不存在尖峰通道。
+            tracking_goal_vel = 4.0
             tracking_yaw = 0.5          # EP: tracking_yaw = 0.5
             goal_reached = 0.0          # 非 EP 项，默认关闭
 
@@ -107,7 +119,11 @@ class N2ParkourCfg(N2PerceptiveCfg):
             # 因为摆动脚在触地/蹬离瞬间同样有带速度的接触。所以这一项不是
             # 对称性药方，而是把"拖蹭"整体变贵、推动两脚都干净落地。
             # 真正打击不对称的是上面改过的 feet_air_time（拖地脚贡献归零）。
-            contact_no_vel = -6
+            # -6 -> -2（改回基类值）。当初提到 -6 是为压制拖蹭，但实测在当前均衡点上
+            # 它只有 -0.0027/步（正项的 3%），已经不是约束；而机器人一旦真开始走快，
+            # 触地速度上升会让它重新变成阻力——留着就是给提速埋雷。
+            # 对称性已由 feet_air_time 的改动（方案A）保住，不依赖这一项。
+            contact_no_vel = -2
 
             # ---- base 系速度跟踪降权 ----
             # EP 保留但次要；主目标已经由 tracking_goal_vel 承担
