@@ -35,67 +35,76 @@ from sim2sim_perceptive import (
 
 
 class Carrot:
-    """键盘驱动的"胡萝卜"目标点，替代预设路点。
+    """键盘牵引的目标点，活在一个【半绑定坐标系】里：原点跟着机器人平移，
+    但坐标轴不跟机器人旋转（始终与世界系同向）。
 
-    为什么不把胡萝卜固定挂在机器人正前方：那样到它的 Δψ 恒等于你设的转向角，
-    就退化成一个纯航向指令了，而 parkour 策略的训练信号是【位置目标】——
-    机器人横向漂移时 goal 方向会转回来、距离会变化，这些反馈全都没有了。
+    carrot_world = base_xy + offset_world，方向键改的是 offset_world。
 
-    所以做成【世界系锚定】：胡萝卜是地上的一个真实点，机器人靠近它、方向随之
-    改变；一旦进到 reach 半径内就沿当前朝向自动前移一个 lookahead，形成
-    "牵着走"的效果，同时保留位置语义。
+    为什么是这个坐标系，而不是另外两种：
 
-    按键（沿用 sim2sim 既有的方向键习惯）：
-      ← / →      左右挪胡萝卜（世界系 y），即转向
-      ↑ / ↓      前后挪胡萝卜（世界系 x）
-      Home/End   加长 / 缩短 lookahead（自动前移的步长）
-      Insert     把胡萝卜重新对齐到机器人正前方
-      F1         同上（与 perceptive 的复位键一致）
+      体坐标系绑定（跟着转）—— 错。Δψ 恒等于你设的转向角，机器人怎么转都不变，
+        完全没有反馈，退化成一个常数输入。
+
+      纯世界系锚定（完全不跟）—— 也不好。机器人会一路逼近目标点，距离不断缩小，
+        必须在进入 reach 时把它往前挪一截才能继续牵引；而这一挪就是观测里的
+        【跳变】：Δψ 和距离瞬间不连续，等于给策略灌一个阶跃。走过头之后方位角
+        还会直接翻 180 度。
+
+      半绑定（跟平移、不跟旋转）—— 本实现。机器人永远追不上，不需要任何前移
+        修正，所以观测连续；而它一旦转头，Δψ = 期望世界航向 − 当前偏航 立刻变化，
+        纠偏反馈完整保留。
+
+    代价要说清楚：因为目标点跟着机器人平移，【横向漂移不再自动被惩罚】——训练时
+    goal 是世界固定的，侧移会让目标方向转回来，这一项在半绑定下没有了。换来的是
+    观测连续性和可遥控性。要复现训练时的严格语义，用 goal_mode=waypoints。
+
+    按键：
+      ← / →      offset 的世界系 y 增/减（转向）
+      ↑ / ↓      offset 的世界系 x 增/减（拉远/拉近）
+      Home/End   整体拉远 / 拉近（沿当前 offset 方向缩放）
+      Insert/F1  把 offset 重置为"当前朝向正前方 lookahead 米"（只取一次 yaw，
+                 此后就是世界系常量，不再跟着转）
     """
 
     def __init__(self, lookahead=1.5, step=0.15):
-        self.pos = None            # 世界系 (x, y)，首次 update 时初始化
+        self.offset = None          # 世界系 (dx, dy)，相对机器人当前位置
         self.lookahead = lookahead
         self.step = step
-        self._nudge = np.zeros(2)
-        self._recenter = False
+        self._pending = []          # 待处理按键，避免回调线程直接改状态
 
     def on_press(self, key):
-        if key == Key.left:
-            self._nudge[1] += self.step
-        elif key == Key.right:
-            self._nudge[1] -= self.step
-        elif key == Key.up:
-            self._nudge[0] += self.step
-        elif key == Key.down:
-            self._nudge[0] -= self.step
-        elif key == Key.home:
-            self.lookahead = min(self.lookahead + 0.1, 5.0)
-        elif key == Key.end:
-            self.lookahead = max(self.lookahead - 0.1, 0.3)
-        elif key in (Key.insert, Key.f1):
-            self._recenter = True
-        else:
-            return
-        print("[carrot] lookahead=%.1f  %s" % (
-            self.lookahead, "recenter" if self._recenter else "nudge=%+.2f,%+.2f" % tuple(self._nudge)))
+        self._pending.append(key)
+
+    def _apply(self, yaw):
+        while self._pending:
+            k = self._pending.pop(0)
+            if self.offset is None:
+                self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+            if k == Key.left:      self.offset[1] += self.step
+            elif k == Key.right:   self.offset[1] -= self.step
+            elif k == Key.up:      self.offset[0] += self.step
+            elif k == Key.down:    self.offset[0] -= self.step
+            elif k in (Key.home, Key.end):
+                n = np.linalg.norm(self.offset)
+                if n > 1e-6:
+                    scale = (n + (0.1 if k == Key.home else -0.1)) / n
+                    self.offset = self.offset * max(scale, 0.05)
+            elif k in (Key.insert, Key.f1):
+                # 只在此刻取一次 yaw，之后 offset 就是世界系常量
+                self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+            else:
+                continue
+            print("[carrot] offset=(%+.2f, %+.2f) 世界系  |offset|=%.2f m"
+                  % (self.offset[0], self.offset[1], np.linalg.norm(self.offset)))
 
     def update(self, base_xy, yaw, reach, model, data):
-        """返回当前胡萝卜的世界坐标 (x, y, z)。"""
-        fwd = np.array([math.cos(yaw), math.sin(yaw)])
-        if self.pos is None or self._recenter:
-            self.pos = base_xy + fwd * self.lookahead
-            self._recenter = False
-        if self._nudge.any():
-            self.pos = self.pos + self._nudge
-            self._nudge[:] = 0.
-        # 进到 reach 内就沿"机器人->胡萝卜"的方向再往前放一个 lookahead
-        d = self.pos - base_xy
-        if np.linalg.norm(d) < reach:
-            dirv = d / (np.linalg.norm(d) + 1e-6) if np.linalg.norm(d) > 1e-3 else fwd
-            self.pos = self.pos + dirv * self.lookahead
-        z = terrain_height_at(model, data, self.pos[None, :])[0]
-        return np.array([self.pos[0], self.pos[1], z])
+        """返回胡萝卜的世界坐标 (x, y, z)。reach 参数保留只为签名统一，此模式不用。"""
+        if self.offset is None:
+            self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
+        self._apply(yaw)
+        pos = base_xy + self.offset
+        z = terrain_height_at(model, data, pos[None, :])[0]
+        return np.array([pos[0], pos[1], z])
 
 
 def build_goals(model, data, start_xy, cfg):
