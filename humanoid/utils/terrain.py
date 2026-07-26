@@ -76,6 +76,57 @@ def directional_stairs(terrain, step_width, step_height, platform_size=1.5):
     k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台=0，往 +x 递增）
     terrain.height_field_raw[:, :] = (k * sh)[:, None]
 
+def parkour_step_terrain(terrain, step_height, num_steps=6, half_valid_width=0.9,
+                         pad_height=0.5, run_up=1.5, x_noise=0.15, y_noise=0.25, rng=None):
+    """Extreme Parkour(arXiv:2309.14341)的 parkour_step_terrain 复刻。
+
+    与本仓库原有的 directional_stairs 有三处本质区别，都是 Parkour 架构的要件：
+      1) 障碍只占据中央条带（沿 y 宽 2*half_valid_width），条带之外抬高 pad_height，
+         形成"不能横着绕开、也不会掉出地图"的软边界。EP 用的是 0.5m 的 y 向 pad。
+      2) 每级台阶上放一个 goal 路点，机器人被奖励**朝当前 goal 前进**，而不是
+         "跟随速度指令方向"。goal 落在障碍上，是"必须踩上去"这件事的来源。
+      3) 台阶位置/宽度带随机抖动，goal 随之移动，避免策略死记几何。
+
+    返回 goals: (num_steps+2, 2)，单位是米、相对本块地形左下角。
+    goals[0] 在出生跑道上，goals[-1] 在末端平台，中间每级台阶一个。
+    """
+    rng = rng or np.random
+    hs, vs = terrain.horizontal_scale, terrain.vertical_scale
+    nx, ny = terrain.height_field_raw.shape
+    mid_y = ny // 2
+    half_w = int(half_valid_width / hs)
+
+    # y 向 pad：中央条带之外整体抬高，形成软墙（EP 的 pad_height=0.5m）
+    pad = int(pad_height / vs)
+    terrain.height_field_raw[:, :mid_y - half_w] = pad
+    terrain.height_field_raw[:, mid_y + half_w:] = pad
+
+    goals = np.zeros((num_steps + 2, 2))
+    x0 = int(run_up / hs)                      # 出生跑道，保持 0 高度
+    usable = nx - x0 - int(0.8 / hs)           # 末端留一小段平台
+    seg = max(1, usable // num_steps)
+    sh = int(step_height / vs)
+
+    goals[0] = [(x0 * 0.5) * hs, mid_y * hs]   # 跑道中点
+    cur_h = 0
+    for k in range(num_steps):
+        xs = x0 + k * seg + int(rng.uniform(-x_noise, x_noise) / hs)
+        xe = x0 + (k + 1) * seg
+        xs = max(x0, min(xs, nx - 1)); xe = max(xs + 1, min(xe, nx))
+        cur_h += sh
+        terrain.height_field_raw[xs:xe, mid_y - half_w:mid_y + half_w] = cur_h
+        gy = mid_y + int(rng.uniform(-y_noise, y_noise) / hs)
+        goals[k + 1] = [((xs + xe) * 0.5) * hs, gy * hs]
+    # 末端平台与最后一级同高，goal 落在它上面
+    terrain.height_field_raw[x0 + num_steps * seg:, mid_y - half_w:mid_y + half_w] = cur_h
+    goals[-1] = [(nx - int(0.4 / hs)) * hs, mid_y * hs]
+    # pad 必须始终高于台阶，否则失去软墙作用
+    top = terrain.height_field_raw[:, mid_y - half_w:mid_y + half_w].max()
+    terrain.height_field_raw[:, :mid_y - half_w] = top + pad
+    terrain.height_field_raw[:, mid_y + half_w:] = top + pad
+    return goals
+
+
 class Terrain:
     def __init__(self, cfg: LeggedRobotCfg.terrain, num_robots) -> None:
 
@@ -287,3 +338,71 @@ class HumanoidTerrain(Terrain):
         else:
             pass
         return terrain
+
+
+class ParkourTerrain(HumanoidTerrain):
+    """Extreme Parkour 式地形：每块地形都是"中央通道 + 一串必须踩上去的 goal 路点"。
+
+    与 HumanoidTerrain 的区别只有两点：
+      1) make_terrain 恒定生成 parkour_step_terrain（难度只调台阶高度），
+         不再按 terrain_proportions 分派多种地形——EP 的每种 parkour 地形都是
+         "通道 + 障碍 + goal"这一个模板，地形种类的多样性来自参数而非分支。
+      2) 多存一个 self.goals[row, col] = (num_goals, 3) 的世界坐标路点表，
+         env 侧按 terrain_levels/terrain_types 索引取用。
+    """
+
+    def __init__(self, cfg, num_robots) -> None:
+        self.num_goals = int(getattr(cfg, 'num_goals', 8))
+        # 必须在 super().__init__ 之前建好：父类构造函数里就会调用 curiculum()
+        self.goals = np.zeros((cfg.num_rows, cfg.num_cols, self.num_goals, 3))
+        self._pending_goals = None
+        super().__init__(cfg, num_robots)
+
+    def make_terrain(self, choice, difficulty):
+        # 注意：基类的 make_terrain 把 SubTerrain 建成正方形（width/length 都用
+        # width_per_env_pixels），因为它默认 terrain_length == terrain_width。
+        # Parkour 需要的是长通道（12m x 4m），必须按 add_terrain_to_map 实际写入的
+        # 形状 (length_per_env_pixels, width_per_env_pixels) 来建，否则广播失败。
+        terrain = terrain_utils.SubTerrain("terrain",
+                                           width=self.length_per_env_pixels,
+                                           length=self.width_per_env_pixels,
+                                           vertical_scale=self.cfg.vertical_scale,
+                                           horizontal_scale=self.cfg.horizontal_scale)
+        c = self.cfg
+        # 台阶高度随难度线性增长，这是唯一的课程维度（EP 同样只调障碍尺度）
+        step_height = getattr(c, 'parkour_step_height_range', [0.05, 0.20])
+        sh = step_height[0] + difficulty * (step_height[1] - step_height[0])
+        n_steps = self.num_goals - 2
+        self._pending_goals = parkour_step_terrain(
+            terrain,
+            step_height=sh,
+            num_steps=n_steps,
+            half_valid_width=getattr(c, 'parkour_half_valid_width', 0.9),
+            pad_height=getattr(c, 'parkour_pad_height', 0.5),
+            run_up=getattr(c, 'parkour_run_up', 1.5),
+        )
+        add_roughness(terrain, np.random.uniform(0.01, 0.03))
+        return terrain
+
+    def add_terrain_to_map(self, terrain, row, col):
+        super().add_terrain_to_map(terrain, row, col)
+        if self._pending_goals is None:
+            return
+        # 块内相对坐标 -> 世界坐标；z 取该 goal 处的地形高度
+        gx = self._pending_goals[:, 0] + row * self.env_length
+        gy = self._pending_goals[:, 1] + col * self.env_width
+        px = np.clip((self._pending_goals[:, 0] / self.horizontal_scale).astype(int),
+                     0, terrain.height_field_raw.shape[0] - 1)
+        py = np.clip((self._pending_goals[:, 1] / self.horizontal_scale).astype(int),
+                     0, terrain.height_field_raw.shape[1] - 1)
+        gz = terrain.height_field_raw[px, py] * self.vertical_scale
+        self.goals[row, col, :, 0] = gx
+        self.goals[row, col, :, 1] = gy
+        self.goals[row, col, :, 2] = gz
+        self._pending_goals = None
+
+    def add_terrain_to_map_origin_override(self, row, col):
+        """出生点放在跑道起点（goals[0]），而不是块中心。"""
+        self.env_origins[row, col, 0] = self.goals[row, col, 0, 0]
+        self.env_origins[row, col, 1] = self.goals[row, col, 0, 1]
+        self.env_origins[row, col, 2] = self.goals[row, col, 0, 2]
