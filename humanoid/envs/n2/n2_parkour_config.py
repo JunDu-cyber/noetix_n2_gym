@@ -62,8 +62,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
         parkour_goals_to_level_down = 1
 
     class commands(N2PerceptiveCfg.commands):
-        # 关掉感知任务里那套按地形列改指令的机制——这里整个任务都是前进指令，
-        # 不存在"部分环境不一样"的不对称
+
         stairs_forward_only = False
         # 站立指令比例设 0：EP 不发站立指令，机器人始终在通道里前进
         standing_prob = 0.02
@@ -79,7 +78,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
 
     class rewards(N2PerceptiveCfg.rewards):
         # goal 到达半径(m)：进到这个范围内就切换到下一个 goal
-        goal_reach_dist = 0.5
+        goal_reach_dist = 0.4
 
         class scales(N2PerceptiveCfg.rewards.scales):
             # ---- EP 的两项核心，权重取自 EP 自己的配置 ----
