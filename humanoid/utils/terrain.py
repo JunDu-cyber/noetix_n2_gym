@@ -377,10 +377,8 @@ class ParkourTerrain(HumanoidTerrain):
         super().__init__(cfg, num_robots)
 
     def make_terrain(self, choice, difficulty):
-        # 注意：基类的 make_terrain 把 SubTerrain 建成正方形（width/length 都用
-        # width_per_env_pixels），因为它默认 terrain_length == terrain_width。
-        # Parkour 需要的是长通道（12m x 4m），必须按 add_terrain_to_map 实际写入的
-        # 形状 (length_per_env_pixels, width_per_env_pixels) 来建，否则广播失败。
+        # 基类默认 terrain_length == terrain_width，把 SubTerrain 建成正方形。
+        # Parkour 是长通道，必须按 add_terrain_to_map 实际写入的形状建，否则广播失败。
         terrain = terrain_utils.SubTerrain("terrain",
                                            width=self.length_per_env_pixels,
                                            length=self.width_per_env_pixels,

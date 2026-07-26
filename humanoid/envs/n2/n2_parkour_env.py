@@ -97,22 +97,15 @@ class N2ParkourEnv(N2PerceptiveEnv):
         dist = torch.norm(self.target_pos_rel, dim=1)
         reach = self.cfg.rewards.goal_reach_dist
 
-        # 推进条件有两个，缺一不可：
-        #
-        # (a) 进到 reach 半径内。半径【必须小于最小 goal 间距】，否则站在一个 goal
-        #     上时下一个已经落在圈内，指针会连跳。实测 parkour_x_range=(0.2,0.4)
-        #     产生的相邻间距是 1.40/0.32/0.27/0.22/0.27/0.32/0.27/0.25/0.65，
-        #     9 对里有 7 对小于原来的 reach=0.4 —— 于是机器人只要挪到第一级台阶附近
-        #     就能连拿 5 个 goal 触发升级，根本不用逐级爬。这正是课程虚高的成因：
-        #     训练报 terrain_level 6.3（14.5cm 台阶），而同期 checkpoint 实测在
-        #     8.8cm 台阶只有 11% 存活、16.3cm 时 0% 能越过台阶起点。
-        #
-        # (b) 已经【越过】该 goal（沿 +x 超过它）且横向没跑出通道。
-        #     只把半径改小会引入新故障：半径 0.15m 时机器人可能擦过 goal 而没进圈，
-        #     goal 留在身后，target_pos_rel 掉头指向后方，tracking_goal_vel 变负、
-        #     tracking_yaw 反过来要求它转身回去，整条通道就走不下去了。
-        #     "越过"要求真实的 +x 位移，所以由它触发的连跳是合法的（确实走过去了）；
-        #     横向门限防止机器人绕到通道外的低地上、沿 y 平移把 goal 一路"越过"。
+        # 两个推进条件，缺一不可：
+        # (a) 进到 reach 半径内。半径【必须小于最小 goal 间距】(见 config 里的
+        #     assert)，否则站在一个 goal 上时下一个已在圈内、指针连跳，机器人挪到
+        #     第一级台阶附近就能连拿 5 个 goal 升级，根本不用逐级爬。
+        # (b) 已【越过】该 goal 且横向没跑出通道。只把半径改小会引入新故障：机器人
+        #     可能擦过 goal 而没进圈，goal 留在身后，target_pos_rel 掉头指向后方，
+        #     tracking_goal_vel 变负、tracking_yaw 要求它转身回去，通道就走不下去。
+        #     "越过"要求真实 +x 位移，所以它触发的连跳是合法的；横向门限防止机器人
+        #     绕到通道外的低地上沿 y 平移把 goal 一路"越过"。
         passed = (self.target_pos_rel[:, 0] < 0) & \
                  (self.target_pos_rel[:, 1].abs() < self.cfg.rewards.goal_pass_lateral_tol)
         advance = ((dist < reach) | passed) & (self.cur_goal_idx < self.num_goals - 1)
@@ -177,10 +170,8 @@ class N2ParkourEnv(N2PerceptiveEnv):
             return
         if not hasattr(self, 'cur_goal_idx'):
             self._init_goal_buffers()
-        # 从 1 开始：goals[0] 就是出生点本身（_reset_root_states 把机器人放在那里），
-        # 若从 0 开始，出生瞬间就落在 goal_reach_dist 内、白送一次"到达"，reached_goals
-        # 恒定虚高 1，课程阈值随之失真。实测冒烟里 reached_goals 恒为 1 而一级台阶都
-        # 没爬上去，就是这个原因。第一个真正的目标是 goals[1]（第一级台阶）。
+        # 从 1 开始：goals[0] 就是出生点本身，从 0 开始会在出生瞬间白送一次"到达"，
+        # reached_goals 恒定虚高 1。第一个真正的目标是 goals[1]（第一级台阶）。
         self.cur_goal_idx[env_ids] = 1
         self.reached_goals[env_ids] = 0
 
@@ -343,11 +334,9 @@ class N2ParkourEnv(N2PerceptiveEnv):
         self.feet_air_time *= ~contact_filt
         self.feet_contact_time *= contact_filt
 
-        # 时效性：last_air_time 只在落地那一刻更新，若不清理，一只脚哪怕十秒没抬过
-        # 也还在吃十秒前那次的信用。实测坏策略上左脚（80.2% 时间贴地）的
-        # last_air_time 是 0.0196s、右脚 0.0197s，几乎相等——A 的"拖地脚贡献为零"
-        # 因此没有兑现。这里规定：单只脚连续触地超过 stale_time 就判定它已经不再
-        # 迈步，信用清零。正常步态的支撑相远短于该阈值，不受影响。
+        # 时效性：last_air_time 只在落地那一刻更新，不清理的话一只脚哪怕十秒没抬过
+        # 也还在吃十秒前那次的信用——拖地腿因此照拿满分，单腿步态治不好。连续触地
+        # 超过 stale_time 即判定不再迈步、信用清零；正常支撑相远短于该阈值。
         stale = self.feet_contact_time > self.cfg.rewards.feet_air_time_stale
         self.last_air_time = torch.where(stale, torch.zeros_like(self.last_air_time),
                                          self.last_air_time)

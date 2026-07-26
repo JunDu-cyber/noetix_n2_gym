@@ -6,33 +6,14 @@ from humanoid.utils.math import quat_apply_yaw, wrap_to_pi
 from humanoid.envs.n2.n2_10dof_env import N2_10dof_Env
 
 class N2PerceptiveEnv(N2_10dof_Env):
-    # ------------------------------------------------------------------
-    # World-frame reference heading (anti-detour)
-    # ------------------------------------------------------------------
-    # Round-4 redesign. The previous version FROZE the world-frame command
-    # direction at each resample and never rotated it again -- but
-    # commands[:, 2] simultaneously asks for up to +-1 rad/s of yaw for 5-15 s
-    # (resampling_time), so the frozen target drifted up to +-15 rad relative
-    # to the robot *by design*. Measured consequence (logs/n2_perceptive/
-    # 0724_17-08-04_): a Monte-Carlo robot that tracks its commands perfectly
-    # and never detours scores world_progress 0.517 / world_heading 0.408,
-    # and the trained policy scored 0.434 / 0.388 -- i.e. the terms were
-    # saturated by the yaw command alone and carried no information about
-    # detouring, while injecting a target the policy cannot observe (no
-    # absolute yaw in obs, frame_stack covers only 0.2 s) at a combined scale
-    # larger than tracking_lin_vel + tracking_ang_vel. That showed up as
-    # value_function loss ~3-4x the flat baseline, mean_noise_std climbing
-    # monotonically 1.0 -> 2.61, tracking rewards decaying and terrain_level
-    # stalling.
-    #
-    # Now the reference yaw INTEGRATES the commanded yaw rate, so a robot that
-    # obeys all three command channels scores full marks and only an
-    # *uncommanded* yaw excursion (a detour turn) or a positional
-    # sidestep/retreat loses reward -- the intended semantics. It also
-    # penalises the *integral* of the yaw error, which is exactly what the
-    # rate-based tracking_ang_vel cannot do: a 2 s 90-degree detour turn costs
-    # a little rate error once, then collects full base-frame tracking_lin_vel
-    # for the next 10 s.
+    # ---- 世界系参考朝向 (反绕路) ----
+    # 参考 yaw 必须【积分】指令偏航率，不能在 resample 时冻结：commands[:,2] 可以
+    # 在一段 5~15s 的指令内要求最多 ±1 rad/s，冻结的目标会按设计漂走 ±15 rad，
+    # 于是这两项被偏航指令本身饱和、不含任何绕路信息(实测完美服从的机器人得分与
+    # 训练策略相同)，反而在策略观测不到的维度上注入方差。
+    # 积分之后：服从全部三个指令通道即得满分，只有【未被指令的】偏航偏移(绕路转弯)
+    # 或位置上的侧移/后退才扣分。它罚的是偏航误差的积分——正是速率型 tracking_ang_vel
+    # 罚不到的东西(转身 2s 只付一次速率误差，之后 10s 照拿满额 tracking_lin_vel)。
     def _resample_commands(self, env_ids):
         """Seed the reference yaw to the robot's actual yaw whenever a new
         command is drawn, so each command segment starts with zero heading
@@ -50,18 +31,11 @@ class N2PerceptiveEnv(N2_10dof_Env):
         if len(env_ids) == 0:
             return
 
-        # ---- B：楼梯列把指令限制到该地形的可穿越轴 (+x) ----
-        # directional_stairs 沿 y 完全恒定，只在 x 方向有台阶。而基类发的是全向随机
-        # 指令，实测只有 50% 指向 +x、真正正面爬楼(cx>0.7)的仅 35%，其余时间这块
-        # 楼梯地形在教平地走路。更致命的是 vx~U(-0.8,0.8) 关于 0 对称，完美服从指令
-        # 的机器人整个 episode 的净 x 位移期望为 0（实测均值 -0.01m / 中位数 0.00m），
-        # 于是"按穿越轴计分"的课程(C)单独用会让楼梯列 40% 升级 / 60% 降级、永久钉死。
-        # 所以 B 是 C 的必要前提：指令方向必须先偏向 +x，C 才有意义。
-        # 形式上等同 Extreme Parkour 在其定向 parkour 地形上的做法
-        # （lin_vel_y=[0,0]、ang_vel_yaw=[0,0]，只留前进速度）。
-        # wz 也置零：yaw_ref 积分 wz，若允许偏航，commands_world_dir 会在段内转离
-        # +x，B 建立的对齐当场失效。
-        # 只影响 index 7/8 的楼梯列；离散方块/金字塔列仍是完整的全向指令。
+        # 楼梯列把指令限制到该地形唯一的可穿越轴 (+x)，等同 Extreme Parkour 在定向
+        # 地形上的做法。这是下面课程改动(只按 +x 计分)的前提：vx~U(-0.8,0.8) 关于 0
+        # 对称，完美服从的机器人整段净 x 位移期望为 0，不先把指令偏向 +x，按穿越轴
+        # 计分只会让楼梯列永久降级。wz 也必须置零，否则 yaw_ref 积分它、
+        # commands_world_dir 会在段内转离 +x。只影响 index 7/8。
         if getattr(self.cfg.commands, 'stairs_forward_only', False):
             on_stairs = self._stairs_env_mask()[env_ids]
             if torch.any(on_stairs):
@@ -70,16 +44,9 @@ class N2PerceptiveEnv(N2_10dof_Env):
                 moving = torch.norm(self.commands[ids, :3], dim=1) > self.min_cmd_vel
                 ids = ids[moving]
                 if len(ids) > 0:
-                    # 在 [stairs_min_vx, lin_vel_x_max] 上均匀重采样，而不是
-                    # abs().clamp(min=0.3)。两个理由，都是实测出来的：
-                    # 1) clamp 会在下限处堆出一个质量点（|vx|~U(0,0.8) 有 37.5%
-                    #    落在 0.3 以下，全被压到 0.3），等于在 30% 的环境上从第 0
-                    #    轮就强制"必须快走"。40 轮消融：min_vx=0.3 的 ep_len 只有
-                    #    5.9，关掉 forward_only 是 9.5——策略连站都没学会就被逼着
-                    #    赶路，摔得更快、更早掉进 only_positive_rewards 的死区。
-                    # 2) 下限不能取 0：|vx| 有 25% 会落到 min_cmd_vel=0.2 之下而被
-                    #    判成站立指令，把楼梯列的站立比例从 5% 抬到近 30%，正好抵消
-                    #    掉 standing_prob 的下调。0.25 刚好在 min_cmd_vel 之上。
+                    # 必须是重采样而不是 abs().clamp(min=lo)：clamp 会在下限堆出
+                    # 质量点(37.5% 的 |vx| 落在 0.3 以下、全被压到 0.3)，等于从第 0
+                    # 轮就强制 30% 的环境快走，实测 ep_len 5.9 vs 9.5。
                     lo = self.cfg.commands.stairs_min_vx
                     hi = max(self.command_ranges["lin_vel_x"][1], lo)
                     self.commands[ids, 0] = torch_rand_float(
@@ -126,46 +93,31 @@ class N2PerceptiveEnv(N2_10dof_Env):
 
         forward = quat_apply(self.base_quat, self.forward_vec)
         yaw = torch.atan2(forward[:, 1], forward[:, 0])
-        # Leak clamp: bound how far the reference may run ahead of the robot.
-        # Without it, a command the robot physically cannot track (a fall, or a
-        # hard turn on stairs) lets yaw_ref race away at up to 1 rad/s for 15 s
-        # and both terms collapse for reasons outside the policy's control --
-        # pure return variance. max_err is deliberately pi/2 rather than
-        # something tighter: at pi/2 a 90-degree detour turn still drives
-        # world_progress to ~0 (cos(pi/2)) and world_heading to ~0.007, i.e.
-        # the full anti-detour signal survives, and only *beyond* 90 degrees
-        # does the penalty saturate -- which is fine, that is already maximal.
+        # 泄漏钳制：限制参考 yaw 领先机器人的幅度。否则一条物理上跟不上的指令
+        # (摔倒、楼梯上急转)会让 yaw_ref 以 1 rad/s 跑 15s，两项因策略无法控制的
+        # 原因崩掉，纯粹是回报方差。取 π/2 而非更紧：在 π/2 处 90° 绕路转弯仍把
+        # world_progress 压到 ~0、world_heading 压到 ~0.007，反绕路信号完整保留。
         max_err = self.cfg.rewards.world_heading_max_err
         self.world_heading_err = torch.clamp(wrap_to_pi(self.yaw_ref - yaw), -max_err, max_err)
         self.yaw_ref = yaw + self.world_heading_err
 
-        # world-frame direction of the base-frame linear velocity command,
-        # rotated by the REFERENCE yaw (not the actual yaw) -- that difference
-        # is the whole anti-detour signal.
+        # 用【参考】yaw 而非实际 yaw 旋转指令——两者之差就是全部的反绕路信号。
         c, s = torch.cos(self.yaw_ref), torch.sin(self.yaw_ref)
         vx, vy = self.commands[:, 0], self.commands[:, 1]
         world_vel_cmd = torch.stack((c * vx - s * vy, s * vx + c * vy), dim=1)
         self.commands_world_speed = torch.norm(world_vel_cmd, dim=1)
         self.commands_world_dir = world_vel_cmd / self.commands_world_speed.clamp(min=1e-6).unsqueeze(1)
 
-        # Directional progress for the terrain curriculum, accumulated
-        # incrementally so it is exact regardless of how many command segments
-        # an episode spans. This replaces the reference-position/segment
-        # bookkeeping of rounds 2-3, whose whole bug class (progress made under
-        # an earlier command being erased by a later one) simply cannot occur
-        # when each step is credited against the direction in force that step.
+        # 课程用的方向性进展。逐步累加(而非记录 episode 起点位移)：每步都记在当步
+        # 生效的方向上，跨指令段自动正确——否则一个 episode 横跨 2+ 个指令方向时，
+        # 前一段的进展会被后一段的方向抹掉。
         prog = torch.sum(self.root_states[:, 7:9] * self.commands_world_dir, dim=1)
 
-        # ---- C：楼梯列只按地形的可穿越轴 (+x 世界系) 计分 ----
-        # directional_stairs 沿 y 恒定，所以"沿 commands_world_dir 的进展"在楼梯列上
-        # 并不等于"穿越了这块地形"：沿 y 走 3 秒（纯平地、一级台阶不碰）就能满足
-        # 1.6m 的升级阈值。改成只累加世界系 x 位移后，课程衡量的才是真实穿越。
-        # 与 B 配套：B 已把楼梯列的指令压到 +x，二者在正常情况下重合；C 额外挡住的是
-        # 机器人**物理上**转向的情形——即使 wz 指令为 0，实际偏航仍会漂移，而 yaw_ref
-        # 的泄漏钳制会跟着被拖走、让 commands_world_dir 转离 +x。那正是"转弯绕路"本身，
-        # C 保证这种情况下课程不给分。
-        # 对称地形（金字塔/离散方块）不做此替换：在那里任意方向的进展本来就等于穿越
-        # 等高线，原始的 commands_world_dir 投影已经是正确的度量。
+        # 楼梯列只按世界系 +x 计分：地形沿 y 恒定，"沿 commands_world_dir 的进展"
+        # 不等于"穿越"——沿 y 走 3 秒(一级台阶都不碰)就能满足升级阈值。这挡住的是
+        # 机器人物理上转向的情形：即使 wz 指令为 0 实际偏航仍会漂移，yaw_ref 的泄漏
+        # 钳制被拖走后 commands_world_dir 会转离 +x，那正是绕路本身。
+        # 对称地形(金字塔/方块)不替换：那里任意方向的进展本就等于穿越等高线。
         on_stairs = self._stairs_env_mask()
         prog = torch.where(on_stairs, self.root_states[:, 7], prog)
 
@@ -370,20 +322,11 @@ class N2PerceptiveEnv(N2_10dof_Env):
         # d_ij : 采样点地形比支撑面低多少 = 该点悬在支撑面之外的深度(m)
         d = (ref - terr).clamp(min=0.)  # (E, F, S)
 
-        # 有界 + 平滑的落脚质量项，对齐"亲兄弟"们的形式：
-        # Limx Oli(arXiv:2512.07464) 的 feet_stair_flat = exp(-4*r_D)、
-        # feet_hold = exp(-100*||dp||^2)，都是指数、有界 [0,1]、处处可导；
-        # PRIOR 的 r_edge 是惩罚(-2.00)。可见共识不在符号(Oli正/PRIOR负)，
-        # 而在【有界】和【平滑】——这正是原实现缺的两条：
-        #   1) 原来是离散计数 sum(1{d > 4cm})，实测中位数恒为 0，一半以上的步
-        #      完全没有梯度，策略学不到"落脚再好一点"的方向；
-        #   2) 计数上界是 2*S=12，实测最大 10，在 scale=-0.35 下单步最坏 -3.50，
-        #      而整个正项栈才 ~1.5 —— 与当年 world_progress=8.0 把 noise_std
-        #      从 1.0 推到 21.0 的尖峰通道完全同构。
-        # 现在 raw = 每只触地脚 (1 - exp(-k*d̄)) 的均值 ∈ [0,1]：完美贴合地面为 0，
-        # 悬空越深越接近 1，单步最坏惩罚被钳在 scale 本身（-0.5），尖峰风险降一个
-        # 数量级，同时 d 的整个范围内都有梯度。悬空深度 d 用每只脚采样点的均值而
-        # 非最大值，避免单个边缘采样点主导整只脚的评分。
+        # raw = 每只触地脚 (1 - exp(-k*d̄)) 的均值 ∈ [0,1]，必须【有界且平滑】
+        # (同类工作 Limx Oli 的 feet_stair_flat=exp(-4*r_D) 也是指数形式)。
+        # 原实现是离散计数 sum(1{d > 4cm})：中位数恒为 0(一半以上的步没有梯度)，
+        # 上界 12 使单步最坏惩罚 -3.5，而整个正项栈才 ~1.5 —— 正是尖峰致发散的通道。
+        # d̄ 取每只脚采样点的均值而非最大值，避免单个边缘点主导整只脚的评分。
         k = self.cfg.rewards.foothold_flat_k
         per_foot = 1.0 - torch.exp(-k * d.mean(dim=-1))  # (E, F) in [0, 1]
         Ci = self.contacts.float()  # (E, F)
@@ -391,11 +334,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
         # 腾空(无触地脚)时为 0：既不奖励也不惩罚，避免把"飞行相"变成可刷的状态。
         return (Ci * per_foot).sum(dim=-1) / n_contact  # (E,) in [0, 1]
 
-    # ---------------- world-frame progress / heading (anti-detour) ----------------
-    # See the _update_world_reference block at the top of this class for why
-    # the reference yaw integrates the commanded yaw rate instead of being
-    # frozen at resample, and for the measured evidence that the frozen
-    # version carried no anti-detour information at all.
+    # ---- 世界系 progress / heading (反绕路)，设计理由见类顶部注释 ----
     def _reward_world_progress(self):
         """Actual world-frame velocity projected on the commanded world
         direction, Extreme-Parkour-style (arXiv:2309.14341's
@@ -407,23 +346,12 @@ class N2PerceptiveEnv(N2_10dof_Env):
             return torch.zeros(self.num_envs, device=self.device)
         world_vel = self.root_states[:, 7:9]  # world-frame xy velocity (unrotated)
         proj = torch.sum(world_vel * self.commands_world_dir, dim=1)
-        # Normalised by the commanded speed, matching Extreme Parkour's
-        # _reward_tracking_goal_vel, which divides by commands[:, 0].
-        #
-        # The previous form returned the raw projection in m/s, clamped to
-        # +-commands_world_speed. That is speed-DEPENDENT: a robot perfectly
-        # obeying a 0.3 m/s command scored 0.3 while one obeying 0.8 m/s scored
-        # 0.8, so the term structurally paid more for fast commands and less for
-        # slow ones -- and slow is exactly what careful stair climbing needs.
-        # Normalised, full obedience scores 1.0 at any commanded speed, so
-        # climbing slowly is no longer penalised relative to striding on flat.
-        #
-        # The denominator floor guards commands whose xy speed is near zero:
-        # min_cmd_vel (0.2) only bounds the norm of the full 3-vector, so a
-        # wz-dominated command can leave |v_xy| ~ 0 and the ratio would blow up.
-        # The symmetric [-1, 1] clamp keeps the original outlier guard -- proj is
-        # unbounded below, and a fall/push spiking world_vel the wrong way once
-        # cost a run its stability (noise_std 1.0 -> 21.0 at scale 8.0).
+        # 必须除以指令速度(同 EP 的 _reward_tracking_goal_vel)：返回原始投影会让
+        # 该项速度相关——服从 0.3m/s 指令得 0.3、服从 0.8m/s 得 0.8，结构性地惩罚
+        # 慢速，而慢正是小心爬楼需要的。归一化后任意指令速度下满分都是 1.0。
+        # 分母下限防 wz 主导的指令(min_cmd_vel 只约束三维模长，|v_xy| 可接近 0)。
+        # 对称 [-1,1] 钳制是尖峰防护：proj 下无界，一次摔倒/推挤反向打飞 world_vel
+        # 就曾把 noise_std 从 1.0 推到 21.0。
         denom = self.commands_world_speed.clamp(min=self.cfg.rewards.world_progress_min_speed)
         rew = torch.clamp(proj / denom, min=-1.0, max=1.0)
         rew[self.standing_cmd] = 0.

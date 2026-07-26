@@ -18,21 +18,13 @@ import numpy as np
 import torch
 
 
-# ---------------------------------------------------------------------------
-# 要测试哪块地形
-#
-# _get_env_origins (legged_robot.py:911) 按
-#     terrain_types = arange(num_envs) // (num_envs / num_cols)
-# 分配地形列，而 play 里 num_envs=1，于是 terrain_types 恒为 0——机器人被永久
-# 钉死在第 0 列（也就是整块地形的边缘），而且每次 reset 都回到同一格，绝大多数
-# 地形根本测不到。terrain_levels 虽然是随机取的，但只在建环境时取一次，之后同样
-# 不变（play 里 curriculum 关着，_update_terrain_curriculum 不会跑）。
-#
-# 下面两个量显式指定要落在哪一格。地形网格在 curriculum=True 时是确定性的
-# （Terrain.curiculum(): 行 i -> 难度 i/num_rows，列 j -> 类型 j/num_cols），
-# 所以 (行, 列) 能精确选中"某种地形的某个难度"。
-#   PLAY_TERRAIN_ROW = None -> 列轮换一圈后自动升一档难度
-#   PLAY_TERRAIN_COL = None -> 每 PLAY_TILE_STEPS 步自动换下一种地形
+# ---- 要测试哪块地形 ----
+# _get_env_origins 按 terrain_types = arange(num_envs) // (num_envs/num_cols)
+# 分配地形列，play 里 num_envs=1 于是恒为 0——机器人被永久钉死在第 0 列，绝大多数
+# 地形测不到。下面两个量显式指定落在哪一格；curriculum=True 时地形网格是确定性的
+# (行 -> 难度，列 -> 类型)，所以 (行,列) 能精确选中"某种地形的某个难度"。
+#   ROW = None -> 列轮换一圈后自动升一档难度
+#   COL = None -> 每 PLAY_TILE_STEPS 步自动换下一种地形
 PLAY_TERRAIN_ROW = None      # 难度行 0..num_rows-1
 PLAY_TERRAIN_COL = None      # 类型列 0..num_cols-1
 PLAY_TILE_STEPS = 600        # 自动轮换时每格停留的步数
@@ -123,14 +115,11 @@ def play(args):
     env_cfg.terrain.mesh_type = 'trimesh'  # 设置地形类型为
     env_cfg.terrain.num_rows = 8  # 设置地形行数
     env_cfg.terrain.num_cols = 8  # 设置地形列数
-    # 必须打开：curriculum=True 时 Terrain 走 curiculum()，地形网格是确定性的
-    # （行 = 难度，列 = 类型），(行,列) 才能精确选中想测的地形。关掉的话走的是
-    # randomized_terrain()，每格类型和难度都随机，既选不中也复现不了。
-    # 建完环境后会立刻把 env.cfg.terrain.curriculum 改回 False，见下面的说明。
+    # 必须打开：否则 Terrain 走 randomized_terrain()，每格类型和难度都随机，既
+    # 选不中也复现不了。建完环境后会立刻改回 False（见下面）。
     env_cfg.terrain.curriculum = True
     env_cfg.terrain.max_init_terrain_level = 5
-    # 9 项，与 HumanoidTerrain.make_terrain 的新增 straight stairs 分支对齐
-    # （7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8，看不到新地形）
+    # 必须 9 项：7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8 的直行楼梯
     if not is_parkour(args.task):
         env_cfg.terrain.terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
     # parkour 的 terrain_proportions 是占位值，ParkourTerrain 恒定生成同一种地形，
@@ -255,18 +244,9 @@ def play(args):
             obs = goto_tile(cur_row, cur_col)
             continue
 
-        # 获取策略动作
         actions = policy(obs.detach())
-        # 执行动作并获取新的状态
-        # obs: 新的观测值
-        # _: 特权观测值（此处忽略）
-        # rews: 奖励值
-        # dones: 完成标记
-        # infos: 额外信息
-        # _: 终止ID（此处忽略）
-        # _: 终止特权观测值（此处忽略）
-        # parkour 训练时 vx 只在 [parkour_min_vx, lin_vel_x[1]] 内采样（默认 0.3~0.8），
-        # 沿用这里写死的 1.0 属于分布外外推，会让 play 的表现比实际更差。
+        # parkour 训练时 vx 只在 [parkour_min_vx, lin_vel_x[1]] 采样(默认 0.3~0.8)，
+        # 沿用写死的 1.0 属于分布外外推，会让 play 的表现比实际更差。
         if is_parkour(args.task):
             env.commands[:, 0] = env_cfg.commands.ranges.lin_vel_x[1]
         else:
