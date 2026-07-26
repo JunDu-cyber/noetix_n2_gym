@@ -75,9 +75,14 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
         # 其余列（离散方块、金字塔）完全不受影响，仍是全向指令——部署需要的横移/
         # 偏航能力在那些列上照常训练。
         stairs_forward_only = True
-        # 楼梯列上前进速度的下限（m/s）。|vx| 服从 U(0,0.8)，不设下限会有大量接近 0
-        # 的指令，机器人贴着楼梯磨蹭也算"服从"，课程照样上不去。
-        stairs_min_vx = 0.3
+        # 楼梯列上前进速度的重采样下限（m/s），区间 [stairs_min_vx, lin_vel_x_max]。
+        # 0.3 -> 0.25：0.3 配 abs().clamp() 会在下限堆出质量点，等于从第 0 轮就
+        # 强制 30% 的环境快走，实测 40 轮 ep_len 只有 5.9（关掉 forward_only 是 9.5）。
+        # 取 0.25 而不是 0：低于 min_cmd_vel=0.2 的指令会被判成站立，把楼梯列的站立
+        # 比例抬到近 30%，抵消 standing_prob 的下调。0.25 刚好在其上。
+        # 原本设下限是担心"贴着楼梯磨蹭也算服从"，但路线 C 的课程只认真实 x 进展，
+        # 磨蹭本来就升不了级，这个顾虑是多余的。
+        stairs_min_vx = 0.25
 
     class domain_rand(N2_10dof_Cfg.domain_rand):
         # 关掉"每次 reset 重抽摩擦/恢复系数"。实测（1024 env）不含 reset 的步
@@ -134,6 +139,17 @@ class N2PerceptiveCfg(N2_10dof_Cfg):
 
 
         anti_freeze_speed = 0.15
+
+        # 见 N2PerceptiveEnv._reward_feet_contact_forces（有界重写版）。
+        # 300 -> 400 N：本机器人自重 33.2kg = 325 N，阈值卡在自重之下意味着单脚支撑期
+        # （正常步态的一半时间）光是站住就在扣分——这也是此前对照实验里该项呈现
+        # "地形无关"（平地 -4.85 / 楼梯 -5.0）的原因：它是恒定步态税，不是踩楼梯的代价。
+        # 400 N ≈ 1.23 倍体重，正常行走基本免费，只有真正的硬冲击才被罚。
+        max_contact_force = 400.
+        # 每只脚超出部分的上限（N）。基类不封顶，摔倒砸地 |F| 上千牛时单步惩罚能盖过
+        # 整个正项栈，把 only_positive_rewards 的截断变成"永远为 0"的死区。
+        # 封在 200 N 后单步最坏 = 2 脚 x 200 x 0.05 x dt = -0.4，与正项同量级。
+        feet_contact_force_max_excess = 200.
 
         world_progress_min_speed = 0.1
 
