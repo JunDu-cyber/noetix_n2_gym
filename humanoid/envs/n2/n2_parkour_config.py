@@ -78,8 +78,17 @@ class N2ParkourCfg(N2PerceptiveCfg):
             ang_vel_yaw = [0.0, 0.0]    # EP: ang_vel_yaw=[0,0]
 
     class rewards(N2PerceptiveCfg.rewards):
-        # goal 到达半径(m)：进到这个范围内就切换到下一个 goal
-        goal_reach_dist = 0.5
+        # goal 到达半径(m)。必须【小于最小 goal 间距】——间距由 terrain.parkour_x_range
+        # 决定，下限 0.2m，实测最小 0.22m。原值 0.5 让 9 对相邻 goal 里 7 对(78%)落在
+        # 半径内，指针连跳、课程虚高：训练报 terrain_level 6.3（14.5cm 台阶），而同期
+        # checkpoint 实测在 8.8cm 台阶只有 11% 存活、16.3cm 时 0% 越过台阶起点。
+        # 详见 N2ParkourEnv._update_goals；环境构造时有 assert 兜底，改
+        # parkour_x_range 时会强制复核这个耦合。
+        goal_reach_dist = 0.15
+        # "越过即算到达"的横向门限(m)。半径缩小后机器人可能擦过 goal 而进不了圈，
+        # goal 留在身后会让 target_pos_rel 掉头、要求它转身回去；"越过"分支避免这点。
+        # 该门限防止绕到通道外(低地)沿 y 平移把 goal 一路"越过"。通道半宽 0.7~0.8m。
+        goal_pass_lateral_tol = 0.5
         # _reward_feet_air_time：单只脚连续触地超过这么久(s)就判定"已不再迈步"，
         # 把它上一次的腾空信用清零。正常支撑相约 0.3~0.6s，取 1.0s 留余量。
         feet_air_time_stale = 1.0

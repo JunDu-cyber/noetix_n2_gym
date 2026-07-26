@@ -53,7 +53,23 @@ class N2ParkourEnv(N2PerceptiveEnv):
             raise ValueError("Terrain mesh type not recognised. Allowed types are [None, plane, heightfield, trimesh]")
         self._create_envs()
 
+    def _check_goal_reach_consistency(self):
+        """goal_reach_dist 必须小于最小 goal 间距，否则指针连跳、课程虚高。
+
+        这两个参数分处 rewards 和 terrain 两段配置，耦合关系不写下来就会被忘掉——
+        这次就是：goal_reach_dist 从 0.5 调到 0.4 时没人注意到 parkour_x_range
+        的下限只有 0.2m，结果 78% 的相邻 goal 落在到达半径内，课程一路虚高到
+        terrain_level 6.3 而策略在 8.8cm 台阶只有 11% 存活。
+        """
+        xr = getattr(self.cfg.terrain, 'parkour_x_range', (0.2, 0.4))
+        reach = self.cfg.rewards.goal_reach_dist
+        if reach >= float(xr[0]):
+            raise ValueError(
+                "goal_reach_dist=%.3f 必须 < parkour_x_range 下限 %.3f，"
+                "否则相邻 goal 落在到达半径内、指针连跳导致课程虚高" % (reach, xr[0]))
+
     def _init_goal_buffers(self):
+        self._check_goal_reach_consistency()
         # (num_rows, num_cols, num_goals, 3) 的世界坐标路点表
         self.terrain_goals = torch.tensor(self.terrain.goals, dtype=torch.float,
                                           device=self.device, requires_grad=False)
@@ -80,7 +96,26 @@ class N2ParkourEnv(N2PerceptiveEnv):
         self.target_pos_rel = cur[:, :2] - self.root_states[:, :2]
         dist = torch.norm(self.target_pos_rel, dim=1)
         reach = self.cfg.rewards.goal_reach_dist
-        advance = (dist < reach) & (self.cur_goal_idx < self.num_goals - 1)
+
+        # 推进条件有两个，缺一不可：
+        #
+        # (a) 进到 reach 半径内。半径【必须小于最小 goal 间距】，否则站在一个 goal
+        #     上时下一个已经落在圈内，指针会连跳。实测 parkour_x_range=(0.2,0.4)
+        #     产生的相邻间距是 1.40/0.32/0.27/0.22/0.27/0.32/0.27/0.25/0.65，
+        #     9 对里有 7 对小于原来的 reach=0.4 —— 于是机器人只要挪到第一级台阶附近
+        #     就能连拿 5 个 goal 触发升级，根本不用逐级爬。这正是课程虚高的成因：
+        #     训练报 terrain_level 6.3（14.5cm 台阶），而同期 checkpoint 实测在
+        #     8.8cm 台阶只有 11% 存活、16.3cm 时 0% 能越过台阶起点。
+        #
+        # (b) 已经【越过】该 goal（沿 +x 超过它）且横向没跑出通道。
+        #     只把半径改小会引入新故障：半径 0.15m 时机器人可能擦过 goal 而没进圈，
+        #     goal 留在身后，target_pos_rel 掉头指向后方，tracking_goal_vel 变负、
+        #     tracking_yaw 反过来要求它转身回去，整条通道就走不下去了。
+        #     "越过"要求真实的 +x 位移，所以由它触发的连跳是合法的（确实走过去了）；
+        #     横向门限防止机器人绕到通道外的低地上、沿 y 平移把 goal 一路"越过"。
+        passed = (self.target_pos_rel[:, 0] < 0) & \
+                 (self.target_pos_rel[:, 1].abs() < self.cfg.rewards.goal_pass_lateral_tol)
+        advance = ((dist < reach) | passed) & (self.cur_goal_idx < self.num_goals - 1)
         self.cur_goal_idx[advance] += 1
         self.reached_goals[advance] += 1
         # 指针推进后重新取，保证 reward/obs 用的是同一步的目标
