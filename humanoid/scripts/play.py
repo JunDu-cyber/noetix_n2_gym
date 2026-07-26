@@ -67,6 +67,45 @@ def terrain_column_names(proportions, num_cols):
     return out
 
 
+def align_policy_cfg_to_checkpoint(train_cfg, args):
+    """用 checkpoint 自己的 train_cfg.json 覆盖当前的 policy 网络配置。
+
+    网络结构一改（例如加 scan encoder、把主干从 [256,128] 扩到 [512,256,128]），
+    旧 checkpoint 就再也 load 不进来：load_state_dict 会同时报 missing key
+    (actor.scan_encoder.*/actor.trunk.*)、unexpected key (actor.0/2/4) 和 critic
+    各层的 size mismatch。但那不是坏档，只是"用新网络去装旧权重"。
+
+    每个 run 目录里都存了当时的 train_cfg.json（含 policy 段），直接拿它覆盖，
+    play 就能忠实复现任何历史 checkpoint，不必回滚代码或手改配置。
+    只影响 play；训练路径不碰。
+    """
+    import json
+    root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', train_cfg.runner.experiment_name)
+    run = args.load_run if getattr(args, 'load_run', None) not in (None, -1, '-1') else None
+    try:
+        if run is None:
+            runs = sorted(d for d in os.listdir(root)
+                          if os.path.isdir(os.path.join(root, d)) and d != 'exported')
+            run = runs[-1]
+        cfg_path = os.path.join(root, run, 'train_cfg.json')
+        saved = json.load(open(cfg_path))['policy']
+    except Exception as e:
+        print('[play] 未能读取 checkpoint 的 policy 配置(%s)，沿用当前配置' % e)
+        return
+    changed = []
+    for k, v in saved.items():
+        if hasattr(train_cfg.policy, k) and getattr(train_cfg.policy, k) != v:
+            changed.append('%s: %s -> %s' % (k, getattr(train_cfg.policy, k), v))
+        setattr(train_cfg.policy, k, v)
+    # 存档里没有的键要清掉，否则会凭空启用当时不存在的结构（如 scan_encoder_dims）
+    for k in ('scan_encoder_dims',):
+        if k not in saved and getattr(train_cfg.policy, k, None) is not None:
+            changed.append('%s: %s -> None(存档中不存在)' % (k, getattr(train_cfg.policy, k)))
+            setattr(train_cfg.policy, k, None)
+    print('[play] 按 %s 的 train_cfg.json 对齐网络配置' % run
+          + ('：' + '; '.join(changed) if changed else '（无差异）'))
+
+
 def play(args):
     """
     播放/测试函数：加载训练好的策略模型并在环境中运行以可视化结果
@@ -176,6 +215,9 @@ def play(args):
     
     # 加载策略
     train_cfg.runner.resume = True  # 设置为恢复模式
+    # 网络结构可能已经改过，用 checkpoint 自带的 train_cfg.json 对齐，
+    # 否则会用新网络去装旧权重、load_state_dict 直接报 size mismatch。
+    align_policy_cfg_to_checkpoint(train_cfg, args)
     # 创建算法运行器实例
     ppo_runner, train_cfg = task_registry.make_alg_runner(env=env, name=args.task, args=args, train_cfg=train_cfg)
     # 获取推理策略
