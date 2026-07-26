@@ -66,7 +66,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
         # 不存在"部分环境不一样"的不对称
         stairs_forward_only = False
         # 站立指令比例设 0：EP 不发站立指令，机器人始终在通道里前进
-        standing_prob = 0.0
+        standing_prob = 0.02
         zero_vx_prob = 0.0
         zero_wz_prob = 0.0
         # 前进速度下限(m/s)
