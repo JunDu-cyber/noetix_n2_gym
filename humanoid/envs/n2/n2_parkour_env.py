@@ -326,10 +326,13 @@ class N2ParkourEnv(N2PerceptiveEnv):
         if not hasattr(self, 'last_air_time'):
             self.last_air_time = torch.zeros_like(self.feet_air_time)
 
+        # 落地【边沿】检测必须在 += self.dt 之前，与上游 legged_gym 的 first_contact
+        # 同序。放到 += 之后就不是边沿了：feet_air_time 在触地步末尾被清零，下一步
+        # 加上 dt 后又 >0，于是整个支撑相每一步都判成"刚落地"，把 last_air_time 反复
+        # 覆盖成 dt(0.02s)，而真实每步腾空是 0.10~0.13s —— 该项因此只输出上限的 2.4%。
+        touchdown = contact_filt & (self.feet_air_time > 0)
         self.feet_air_time += self.dt
         self.feet_contact_time += self.dt
-        # 落地瞬间把刚刚完成的腾空时长记下来（此后该脚 air_time 归零）
-        touchdown = contact_filt & (self.feet_air_time > 0)
         self.last_air_time = torch.where(touchdown, self.feet_air_time, self.last_air_time)
         self.feet_air_time *= ~contact_filt
         self.feet_contact_time *= contact_filt
