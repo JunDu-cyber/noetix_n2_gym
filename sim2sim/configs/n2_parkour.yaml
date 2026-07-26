@@ -65,7 +65,7 @@ goal_reach_dist: 0.5
 
 # goal 模式：
 #   waypoints —— 用上面 goal_first_x/spacing/count 生成的固定路点（可复现的爬楼测试）
-#   carrot    —— 方向键牵引的世界系目标点（像牵胡萝卜，更接近真实遥操作）
-goal_mode: waypoints
+#   carrot    —— 方向键牵引的世界系目标点（胡萝卜）
+goal_mode: carrot
 carrot_lookahead: 1.5    # 胡萝卜每次自动前移的距离(m)
 carrot_step: 0.15        # 单次按键挪动量(m)

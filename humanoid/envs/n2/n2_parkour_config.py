@@ -33,7 +33,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
         num_rows = 10
         num_cols = 10
 
-        # ParkourTerrain 恒定生成 parkour_step_terrain，此项不起作用(仅兼容基类构造)。
+        # ParkourTerrain 恒定生成 parkour_step_terrain
         terrain_proportions = [0., 0., 0., 0., 0., 0., 0., 1.0, 0.]
 
         # ---- 以下取自 EP 源码 parkour_step_terrain 的默认值本身 ----
@@ -43,15 +43,13 @@ class N2ParkourCfg(N2PerceptiveCfg):
         parkour_y_range = (-0.15, 0.15)     # EP: y_range=[-0.15,0.15]
         parkour_pad_width = 0.1             # EP: pad_width=0.1，最外缘细边框
         parkour_pad_height = 0.5            # EP: pad_height=0.5
-        # 台阶高度随难度从 5cm 线性升到 EP 的 20cm（唯一的课程维度）
+
         parkour_step_height_range = [0.05, 0.20]
 
-        # 唯一因形态偏离 EP 的一项：EP 的 [0.45,0.5](通道 0.9~1.0m)是给 A1 四足设计的，
-        # 人形足距加摆动余量放不下，放宽到通道 1.4~1.6m。
         parkour_half_valid_width = (0.7, 0.8)
         # 出生点抖动(m)
         parkour_spawn_jitter = 0.3
-        # 课程：走到第几个 goal 才升级 / 不足几个就降级
+        # 课程
         parkour_goals_to_level_up = 5
         parkour_goals_to_level_down = 1
 
@@ -71,32 +69,25 @@ class N2ParkourCfg(N2PerceptiveCfg):
             ang_vel_yaw = [0.0, 0.0]    # EP: ang_vel_yaw=[0,0]
 
     class rewards(N2PerceptiveCfg.rewards):
-        # 【必须小于最小 goal 间距】，否则站在一个 goal 上时下一个已落在圈内、指针连跳，
-        # 机器人不爬楼也能升级。间距下限由 terrain.parkour_x_range 决定(0.2m)。
-        # 构造时有 assert 强制复核这个跨段耦合。
+        # 【必须小于最小 goal 间距】
         goal_reach_dist = 0.15
-        # "越过即算到达"的横向门限(m)：防止绕到通道外的低地沿 y 平移把 goal 越过。
+        # 越过即算到达
         goal_pass_lateral_tol = 0.5
-        # 单脚连续触地超过此时长(s)判定为"不再迈步"，清零其腾空信用。正常支撑相 0.3~0.6s。
+
         feet_air_time_stale = 1.0
 
         class scales(N2PerceptiveCfg.rewards.scales):
-            # 远高于 EP 的 1.5：本仓库奖励栈里约 81% 的正奖励站着不动就能拿到
-            # (default_joint_pos / feet_contact / orientation / tracking_yaw)，1.5 压不过，
-            # 策略会收敛到"站稳朝向 goal 不动"的局部最优(arXiv:2010.04304)。
-            # 4.0 使满速时该项达姿态项的 114%；该项有界[-1,1]，无尖峰风险。
+
             tracking_goal_vel = 4.0
             tracking_yaw = 0.5          # EP: tracking_yaw = 0.5
             goal_reached = 0.0          # 非 EP 项，默认关闭
 
-            # 关掉 n2_perceptive 的世界系反绕路奖励：它们解决的是"全向指令+定向地形"的
-            # 错配，而 Parkour 从源头消除了该错配，叠加只会互相干扰。
+
             world_progress = 0.0
             world_heading = 0.0
             anti_freeze = 0.0
 
-            # 保持基类值。曾提到 -6 以压制拖蹭，但它罚的是"带速度的接触"，与前进速度
-            # 单调冲突，会把策略推向极慢行走；对称性由 feet_air_time 保证，不依赖此项。
+
             contact_no_vel = -2
 
             # base 系速度跟踪降权：主目标已由 tracking_goal_vel 承担。

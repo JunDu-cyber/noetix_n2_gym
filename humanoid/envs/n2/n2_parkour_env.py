@@ -10,24 +10,6 @@ from humanoid.envs.n2.n2_perceptive_env import N2PerceptiveEnv
 
 class N2ParkourEnv(N2PerceptiveEnv):
     """Extreme Parkour(arXiv:2309.14341)架构的复刻。
-
-    与 n2_perceptive 的根本区别是【目标从"速度指令方向"换成了"goal 路点位置"】。
-    这解决的是我们反复撞上的那个结构性错配：定向地形要求朝 +x 穿越，而全向随机速度
-    指令有一半时间指向别处，于是课程能靠沿 y 走刷级、策略也学不会爬。EP 不存在这个
-    问题，因为它压根不发横移/偏航指令，且奖励锚在"必须踩上去"的 goal 上。
-
-    三个要件，逐条对齐 EP 的源码：
-      1) 指令只有前进速度：lin_vel_y=[0,0]、ang_vel_yaw=[0,0]（EP 的 config 就是这么写的）。
-      2) 奖励锚定 goal 位置而非方向：
-           tracking_goal_vel = min(<d_hat, v_world>, vx_cmd) / vx_cmd
-           tracking_yaw      = exp(-|wrap(atan2(d) - yaw)|)
-         其中 d = cur_goal - root_xy 是【位置差】，会随机器人偏移而转向——这正是
-         我们此前用 commands_world_dir（只有方向、不随位置更新）拿不到的那部分信号。
-      3) goal 落在障碍上，地形是"中央通道 + y 向 pad"，横向绕行在几何上被堵死。
-
-    goal 是位置目标，必须可观测，否则就是 Round-4 那个"目标不在观测里"的老坑。
-    这里把 [cos Δψ, sin Δψ]（Δψ = 到当前 goal 的方位角与自身朝向之差）加进单帧观测，
-    num_single_obs 因此 135 -> 137，对应 EP 的 delta-yaw-to-goal 观测。
     """
 
     # ---------------- terrain / goals ----------------
@@ -55,11 +37,6 @@ class N2ParkourEnv(N2PerceptiveEnv):
 
     def _check_goal_reach_consistency(self):
         """goal_reach_dist 必须小于最小 goal 间距，否则指针连跳、课程虚高。
-
-        这两个参数分处 rewards 和 terrain 两段配置，耦合关系不写下来就会被忘掉——
-        这次就是：goal_reach_dist 从 0.5 调到 0.4 时没人注意到 parkour_x_range
-        的下限只有 0.2m，结果 78% 的相邻 goal 落在到达半径内，课程一路虚高到
-        terrain_level 6.3 而策略在 8.8cm 台阶只有 11% 存活。
         """
         xr = getattr(self.cfg.terrain, 'parkour_x_range', (0.2, 0.4))
         reach = self.cfg.rewards.goal_reach_dist
@@ -97,15 +74,7 @@ class N2ParkourEnv(N2PerceptiveEnv):
         dist = torch.norm(self.target_pos_rel, dim=1)
         reach = self.cfg.rewards.goal_reach_dist
 
-        # 两个推进条件，缺一不可：
-        # (a) 进到 reach 半径内。半径【必须小于最小 goal 间距】(见 config 里的
-        #     assert)，否则站在一个 goal 上时下一个已在圈内、指针连跳，机器人挪到
-        #     第一级台阶附近就能连拿 5 个 goal 升级，根本不用逐级爬。
-        # (b) 已【越过】该 goal 且横向没跑出通道。只把半径改小会引入新故障：机器人
-        #     可能擦过 goal 而没进圈，goal 留在身后，target_pos_rel 掉头指向后方，
-        #     tracking_goal_vel 变负、tracking_yaw 要求它转身回去，通道就走不下去。
-        #     "越过"要求真实 +x 位移，所以它触发的连跳是合法的；横向门限防止机器人
-        #     绕到通道外的低地上沿 y 平移把 goal 一路"越过"。
+
         passed = (self.target_pos_rel[:, 0] < 0) & \
                  (self.target_pos_rel[:, 1].abs() < self.cfg.rewards.goal_pass_lateral_tol)
         advance = ((dist < reach) | passed) & (self.cur_goal_idx < self.num_goals - 1)
@@ -126,11 +95,6 @@ class N2ParkourEnv(N2PerceptiveEnv):
     # ---------------- commands: 只发前进速度 ----------------
     def _resample_commands(self, env_ids):
         """EP 的指令空间只有 vx。这里在基类采样之后把 vy/wz 清零、vx 取正。
-
-        注意与 n2_perceptive 的 stairs_forward_only 不同：那边是在【部分地形列】上
-        改指令，结果和 _reward_default_joint_pos 的门控（有横移/偏航指令才白送满分）
-        打架；这里是【整个任务】都不发横移/偏航，config 里把 lin_vel_y / ang_vel_yaw
-        的范围直接设成 0，门控行为对所有环境一致，不存在那种不对称。
         """
         super()._resample_commands(env_ids)
         if len(env_ids) == 0:
@@ -255,9 +219,6 @@ class N2ParkourEnv(N2PerceptiveEnv):
     def _reward_tracking_goal_vel(self):
         """min(<d_hat, v_world>, vx_cmd) / vx_cmd，逐字对应 EP 的 _reward_tracking_goal_vel。
 
-        与我们之前的 world_progress 的关键差别：d_hat 由【位置差】算出，机器人一旦
-        横向偏离，d_hat 就转过来指回 goal，投影随之下降——这是"锚在方向"拿不到的
-        反偏移信号。归一化到 [.., 1] 使慢速指令下完美跟随同样得满分。
         """
         if not hasattr(self, 'target_pos_rel'):
             return torch.zeros(self.num_envs, device=self.device)
@@ -275,7 +236,7 @@ class N2ParkourEnv(N2PerceptiveEnv):
         return torch.exp(-torch.abs(self.goal_delta_yaw))
 
     def _reward_goal_reached(self):
-        """踩到一个新 goal 的稀疏奖励。EP 没有这一项（它靠 goal 推进本身改变 d_hat），
+        """踩到一个新 goal 的稀疏奖励。EP 没有这一项（
         这里保留一个很小的权重作为课程信号，可在 config 里置 0 完全对齐 EP。"""
         if not hasattr(self, 'cur_goal_idx'):
             return torch.zeros(self.num_envs, device=self.device)
@@ -284,10 +245,6 @@ class N2ParkourEnv(N2PerceptiveEnv):
     # ---------------- debug 可视化：把 goal 画出来 ----------------
     def _draw_debug_vis(self):
         """在基类的高度图散点之外，额外画出本块地形的 goal 路点。
-
-        Parkour 的行为完全由"当前 goal 在哪"决定，看不到 goal 就没法判断机器人是
-        在朝目标走还是在乱走——这是 play 里最需要的一条信息。
-        绿色小球 = 还没到的 goal，红色大球 = 当前正在追的那个。
         """
         super()._draw_debug_vis()
         if self.viewer is None or not hasattr(self, 'cur_goal_idx'):
@@ -305,31 +262,12 @@ class N2ParkourEnv(N2PerceptiveEnv):
 
     # ---------------- 步态：堵住"单腿拖行"这个局部最优 ----------------
     def _reward_feet_air_time(self):
-        """每只脚独立计腾空时长后相加，不再对两脚取 min（方案 A）。
-
-        基类版本：
-            in_mode_time = where(in_contact, feet_contact_time, feet_air_time)
-            rew = min(where(single_stance, in_mode_time, 0), dim=1)
-        它对两脚的 in-mode 时间取 min，而拖地脚【永远在接触】，它的 in_mode_time 是
-        一路增长的 contact_time，min 于是总是取到摆动脚的 air_time —— "一只脚永远
-        贴地 + 另一只脚迈步"因此拿到和真正交替迈步一样的满分。实测 model_999：
-        左脚触地 80.2%、右脚 22.5%，不对称度 0.578，而该项照样给到 0.06~0.07。
-
-        改法：只认【每只脚自己最近一次完整腾空的时长】，两脚各自封顶后相加再乘 0.5，
-        使上限与基类的 0.5 一致。拖地脚从不腾空、last_air_time 恒为 0，贡献为零，
-        整项直接少一半；真正交替的步态两脚都有腾空，不受影响。
-
-        注意不能简单把 min 换成 sum：那样拖地脚的 contact_time 会被当作"in-mode
-        时间"越滚越大，反而把拖行奖励成最优解。
+        """每只脚独立计腾空时长后相加，不再对两脚取 min。
         """
         contact_filt = torch.logical_or(self.contacts, self.last_contacts)
         if not hasattr(self, 'last_air_time'):
             self.last_air_time = torch.zeros_like(self.feet_air_time)
 
-        # 落地【边沿】检测必须在 += self.dt 之前，与上游 legged_gym 的 first_contact
-        # 同序。放到 += 之后就不是边沿了：feet_air_time 在触地步末尾被清零，下一步
-        # 加上 dt 后又 >0，于是整个支撑相每一步都判成"刚落地"，把 last_air_time 反复
-        # 覆盖成 dt(0.02s)，而真实每步腾空是 0.10~0.13s —— 该项因此只输出上限的 2.4%。
         touchdown = contact_filt & (self.feet_air_time > 0)
         self.feet_air_time += self.dt
         self.feet_contact_time += self.dt
@@ -337,9 +275,6 @@ class N2ParkourEnv(N2PerceptiveEnv):
         self.feet_air_time *= ~contact_filt
         self.feet_contact_time *= contact_filt
 
-        # 时效性：last_air_time 只在落地那一刻更新，不清理的话一只脚哪怕十秒没抬过
-        # 也还在吃十秒前那次的信用——拖地腿因此照拿满分，单腿步态治不好。连续触地
-        # 超过 stale_time 即判定不再迈步、信用清零；正常支撑相远短于该阈值。
         stale = self.feet_contact_time > self.cfg.rewards.feet_air_time_stale
         self.last_air_time = torch.where(stale, torch.zeros_like(self.last_air_time),
                                          self.last_air_time)

@@ -31,11 +31,6 @@ class N2PerceptiveEnv(N2_10dof_Env):
         if len(env_ids) == 0:
             return
 
-        # 楼梯列把指令限制到该地形唯一的可穿越轴 (+x)，等同 Extreme Parkour 在定向
-        # 地形上的做法。这是下面课程改动(只按 +x 计分)的前提：vx~U(-0.8,0.8) 关于 0
-        # 对称，完美服从的机器人整段净 x 位移期望为 0，不先把指令偏向 +x，按穿越轴
-        # 计分只会让楼梯列永久降级。wz 也必须置零，否则 yaw_ref 积分它、
-        # commands_world_dir 会在段内转离 +x。只影响 index 7/8。
         if getattr(self.cfg.commands, 'stairs_forward_only', False):
             on_stairs = self._stairs_env_mask()[env_ids]
             if torch.any(on_stairs):
@@ -44,9 +39,6 @@ class N2PerceptiveEnv(N2_10dof_Env):
                 moving = torch.norm(self.commands[ids, :3], dim=1) > self.min_cmd_vel
                 ids = ids[moving]
                 if len(ids) > 0:
-                    # 必须是重采样而不是 abs().clamp(min=lo)：clamp 会在下限堆出
-                    # 质量点(37.5% 的 |vx| 落在 0.3 以下、全被压到 0.3)，等于从第 0
-                    # 轮就强制 30% 的环境快走，实测 ep_len 5.9 vs 9.5。
                     lo = self.cfg.commands.stairs_min_vx
                     hi = max(self.command_ranges["lin_vel_x"][1], lo)
                     self.commands[ids, 0] = torch_rand_float(
@@ -58,10 +50,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
         self.yaw_ref[env_ids] = torch.atan2(forward[:, 1], forward[:, 0])
 
     def _stairs_env_mask(self):
-        """每个环境是否位于直行楼梯列（terrain_proportions 的 index 7/8）。
-
-        非课程地形（plane / selected，没有 terrain_types）时全 False，B/C 自动失效，
-        play 和盲策略路径都不受影响。"""
+        """每个环境是否位于直行楼梯列（terrain_proportions 的 index 7/8）。"""
         if not hasattr(self, 'terrain_types'):
             return torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         if not hasattr(self, 'stairs_tile'):
@@ -93,10 +82,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
 
         forward = quat_apply(self.base_quat, self.forward_vec)
         yaw = torch.atan2(forward[:, 1], forward[:, 0])
-        # 泄漏钳制：限制参考 yaw 领先机器人的幅度。否则一条物理上跟不上的指令
-        # (摔倒、楼梯上急转)会让 yaw_ref 以 1 rad/s 跑 15s，两项因策略无法控制的
-        # 原因崩掉，纯粹是回报方差。取 π/2 而非更紧：在 π/2 处 90° 绕路转弯仍把
-        # world_progress 压到 ~0、world_heading 压到 ~0.007，反绕路信号完整保留。
+        # 泄漏钳制：限制参考 yaw 领先机器人的幅度。
         max_err = self.cfg.rewards.world_heading_max_err
         self.world_heading_err = torch.clamp(wrap_to_pi(self.yaw_ref - yaw), -max_err, max_err)
         self.yaw_ref = yaw + self.world_heading_err
@@ -108,16 +94,9 @@ class N2PerceptiveEnv(N2_10dof_Env):
         self.commands_world_speed = torch.norm(world_vel_cmd, dim=1)
         self.commands_world_dir = world_vel_cmd / self.commands_world_speed.clamp(min=1e-6).unsqueeze(1)
 
-        # 课程用的方向性进展。逐步累加(而非记录 episode 起点位移)：每步都记在当步
-        # 生效的方向上，跨指令段自动正确——否则一个 episode 横跨 2+ 个指令方向时，
-        # 前一段的进展会被后一段的方向抹掉。
+        # 课程用的方向性进展。逐步累加(而非记录 episode 起点位移)
         prog = torch.sum(self.root_states[:, 7:9] * self.commands_world_dir, dim=1)
 
-        # 楼梯列只按世界系 +x 计分：地形沿 y 恒定，"沿 commands_world_dir 的进展"
-        # 不等于"穿越"——沿 y 走 3 秒(一级台阶都不碰)就能满足升级阈值。这挡住的是
-        # 机器人物理上转向的情形：即使 wz 指令为 0 实际偏航仍会漂移，yaw_ref 的泄漏
-        # 钳制被拖走后 commands_world_dir 会转离 +x，那正是绕路本身。
-        # 对称地形(金字塔/方块)不替换：那里任意方向的进展本就等于穿越等高线。
         on_stairs = self._stairs_env_mask()
         prog = torch.where(on_stairs, self.root_states[:, 7], prog)
 
@@ -132,11 +111,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
             self.world_progress_accum[env_ids] = 0.
 
     def _stairs_tile_mask(self):
-        """哪些地形列是直行楼梯（terrain_proportions 的 index 7/8 分支）。
 
-        复刻 Terrain.curiculum() 的 choice=j/num_cols+0.001 与 make_terrain 的 elif
-        链，只在 curriculum=True 的确定性网格下成立（训练就是这么跑的）。
-        """
         props = self.cfg.terrain.terrain_proportions
         cum = [float(np.sum(props[:i + 1])) for i in range(len(props))]
         n = self.cfg.terrain.num_cols
@@ -148,18 +123,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
         return mask
 
     def _reset_root_states(self, env_ids):
-        """把直行楼梯格的出生点从块中心挪到 -x 端的底部平台。
 
-        directional_stairs 让楼梯从 -x 端底部平台贯穿整块地形往 +x 升/降。基类把
-        机器人放在块中心（env_origins）——那是半山腰、可爬长度只剩一半，而且基类的
-        env_origin_z = max(中心±1m 窗口) 在单调楼梯上取的是前方 1m 处的最高台阶，
-        实测会让出生点悬空 0.2~0.8m（台阶越高越严重），每次 reset 都在自由落体。
-        这里对楼梯列把出生点移到底部平台中央：
-          x: env_origin_x - env_length/2 + platform/2，抖动收窄到 ±(platform*0.4)，
-             免得越过 -x 端背墙(上一级楼梯的顶)或直接生到台阶上。
-          z: 底部平台恒为 0 高度，改成 base_init 站立高度 + 0.05，消除上述悬空。
-        y 保持基类的 ±1m（楼梯沿 y 恒高，任意 y 出生等价）。其他地形不受影响。
-        """
         super()._reset_root_states(env_ids)
         if not self.custom_origins or len(env_ids) == 0:
             return
@@ -182,17 +146,7 @@ class N2PerceptiveEnv(N2_10dof_Env):
             gymtorch.unwrap_tensor(ids32), len(ids32))
 
     def _update_terrain_curriculum(self, env_ids):
-        """Directional variant of the base class's radial-distance curriculum
-        (legged_robot.py:513). The base version levels up on ANY net
-        displacement from spawn, which a centrally-symmetric obstacle (or just
-        circling/retreating) satisfies as validly as actually crossing it --
-        confirmed in logs/n2_perceptive/0724_11-26-53_, where terrain_level
-        climbed to ~4.9 while rew_stumble/rew_collision stayed near zero (the
-        robot was rarely making real contact with the stairs at all). Uses the
-        per-step accumulated projection onto commands_world_dir instead, so
-        credit only accrues for progress in the direction actually asked for.
-        Only overridden here, not in the shared base class, so n2_10dof/n2
-        (no world-frame buffers) keep the original radial behaviour."""
+
         if not self.init_done:
             return
         if not hasattr(self, 'world_progress_accum'):
@@ -375,21 +329,6 @@ class N2PerceptiveEnv(N2_10dof_Env):
     # ---------------- bounded foot-impact penalty ----------------
     def _reward_feet_contact_forces(self):
         """有界版的接触力惩罚，替代基类的 sum(clip(|F| - max_contact_force, 0, inf))。
-
-        基类那版有两个问题，实测都在咬人：
-        1) 阈值 300N 低于本机器人自重（33.2kg = 325N）。单脚支撑期——正常步态里
-           一半的时间——那只脚就承受全部体重，于是"仅仅是正常走路"都在持续扣分。
-           这解释了此前对照实验里它为何是**地形无关**的（平地 -4.85 / 楼梯 -5.0）：
-           它根本不是在惩罚"踩楼梯太重"，而是一笔恒定的步态税。
-        2) 上不封顶。摔倒砸地时 |F| 轻易上千牛，单步惩罚可以盖过整个正项栈。这与
-           已经修过的 world_progress（scale 8.0 把 noise_std 从 1.0 推到 21.0）和
-           foothold（离散计数上界 12、单步 -3.5）是同一条尖峰通道。
-
-        实测发散 run 0726_10-08-30_：本项 -5.46/秒，而全部正项合计只有 +0.41/秒。
-        因为 only_positive_rewards=True 会把每步总奖励截断到 0，**每一步都被截断**，
-        奖励梯度完全消失、只剩熵项，于是 noise_std 单调爬到 2.6，机器人 400 轮都没
-        学会站住（episode 长度 ~10 步）。同期健康 run 的净值是 -0.34/秒，勉强贴在
-        截断边界上——可见这个奖励栈本来就悬在悬崖边，任何扰动都会把它推下去。
         """
         excess = (torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1)
                   - self.cfg.rewards.max_contact_force).clip(min=0.)
@@ -397,27 +336,6 @@ class N2PerceptiveEnv(N2_10dof_Env):
 
     # ---------------- anti-freeze (break the "stand still on stairs" optimum) ----------------
     def _reward_anti_freeze(self):
-        """Positive reward for command-aligned forward world-speed, saturating at
-        `rewards.anti_freeze_speed`.
-
-        Motivation: with only_positive_rewards=True the summed step reward is
-        clipped at 0, so a robot commanded to move but standing still sits at
-        exactly 0 -- and a climbing attempt that stumbles also clips to 0. That
-        erases the gradient favouring "move" over "freeze" on risky terrain,
-        which is why the policy climbs in Isaac yet freezes on the *same* stairs
-        in MuJoCo (verified: spawned on the stairs, commanded forward, it stands
-        with world-vx approx 0 for 30 s). A *penalty* cannot fix this -- it is
-        clipped away with everything else. So this is a POSITIVE term instead.
-
-        It saturates at anti_freeze_speed (a few cm/s), so it is NOT a speed race
-        and does not fight tracking_lin_vel: the entire reward is earned crossing
-        from 0 to anti_freeze_speed, i.e. the steepest gradient sits exactly at
-        the freeze point. Standing earns 0, any real forward motion earns up to
-        1, lifting "move" above "freeze" even after the only_positive_rewards
-        clip. Uses the same world-frame velocity / commands_world_dir projection
-        as _reward_world_progress (so retreat/detour earns nothing here either).
-        Gated off for standing_cmd envs -- they are meant to hold still, so this
-        never fights _reward_stand_still."""
         if not hasattr(self, 'commands_world_dir'):
             return torch.zeros(self.num_envs, device=self.device)
         fwd_speed = torch.sum(self.root_states[:, 7:9] * self.commands_world_dir, dim=1)
@@ -429,41 +347,6 @@ class N2PerceptiveEnv(N2_10dof_Env):
     def _reward_stand_still(self):
         """De-weighted, capped version of N2_10dof_Env._reward_stand_still.
 
-        The inherited term is `sum|dof_pos-default| + sum(dof_vel^2)`: an L1
-        pose term plus an L2 joint-velocity term that is quadratic and
-        unbounded. Only standing_cmd envs are scored (~20% of envs, since
-        n2_10dof_env.py:134 zeroes every command on 20% of resamples).
-
-        Measured under real training conditions (sampled actions, i.e. WITH
-        the policy's exploration noise -- the dominant driver of dof_vel, and
-        the thing an inference-mode probe misses entirely) on the
-        0723_19-51-09_ checkpoint:
-
-          standing envs   raw mean 88.8, median 43.5, p95 338, max 3917
-                          per-step total reward BEFORE clipping: mean -0.162
-                          clipped to 0 by only_positive_rewards: 75.3%
-          moving envs     per-step total mean -0.009, clipped: 17.0%
-
-        So standing envs spent three quarters of their steps pinned at exactly
-        0 total reward. Zero reward variation means zero advantage, so the
-        standing posture was never actually trained -- which is visible in
-        deployment as a robot that shakes badly while commanded to stand and
-        goes quiet the moment a velocity command arrives. Note this was
-        measured on a run WITHOUT the world rewards, so the dead zone is not
-        caused by them; they deepen it (rew_stand_still scales with the world
-        reward scale: 1.0/0.5 -> -2.9, 3.5/1.5 -> -4.6, 5.0/2.5 -> -9.0)
-        because higher noise_std means more action noise means quadratically
-        more dof_vel^2.
-
-        Fix: de-weight the quadratic term so the standing state sits back in
-        positive territory and gets a gradient again, and keep a cap as an
-        outlier guard on top. A cap ALONE does not work -- capping raw at 80
-        still left 75% of standing steps clipped, because the problem is the
-        typical value (median 43.5), not just the tail. De-weighting is also
-        preferable to simply lowering the scale: it keeps a non-zero gradient
-        on dof_vel everywhere, whereas above a hard cap that gradient is
-        exactly zero, removing the very signal that is supposed to quiet the
-        joints down.
 
         Overridden here rather than in N2_10dof_Env so the blind n2_10dof/n2
         tasks are untouched."""
