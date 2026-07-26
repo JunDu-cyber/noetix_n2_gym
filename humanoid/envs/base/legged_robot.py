@@ -365,6 +365,21 @@ class LeggedRobot(BaseTask):
         return props, total_mass
     
     def _refresh_actor_rigid_shape_props(self, env_ids):
+        # 两个开关都关时直接返回。下面那个 per-env 的 Python 循环原本写在
+        # if randomize_* 之外，即使随机化全部关闭也照跑一遍 get/set_actor_
+        # rigid_shape_properties——纯粹的空转。
+        if not (self.cfg.domain_rand.randomize_friction or self.cfg.domain_rand.randomize_restitution):
+            return
+        # 每次 reset 重新抽样摩擦/恢复系数是本仓库在 legged_gym 之上加的；上游只在
+        # 建环境时按 env 随机化一次（_process_rigid_shape_props），那已经让 4096 个
+        # 环境各自持有取自 256 个 bucket 的不同摩擦，策略照样看得到整个分布。
+        # 而这个循环对每个重置环境都要走一次 Python<->C++ 往返（get + set，中间还有
+        # 一个遍历所有碰撞体的内层循环）。实测（1024 env）：不含 reset 的步 52.7ms，
+        # 含 reset 的步 296.8ms —— 5.6 倍，且训练早期 episode 很短、几乎每步都在
+        # reset，于是它吃掉了绝大部分采样时间。关掉它只损失"同一环境跨 episode 换
+        # 摩擦"这一点额外多样性，换来数倍吞吐。
+        if not getattr(self.cfg.domain_rand, 'refresh_shape_props_on_reset', True):
+            return
         num_buckets = 256
         if self.cfg.domain_rand.randomize_friction:
             bucket_ids = torch.randint(0, num_buckets, (len(env_ids), 1))
