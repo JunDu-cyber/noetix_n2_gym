@@ -200,7 +200,27 @@ class LeggedRobotCfg(BaseConfig):
             bounce_threshold_velocity = 0.1 # [m]
             max_depenetration_velocity = 1.0
             max_gpu_contact_pairs = 2**23 #2**24 -> needed for 8000 envs and more
-            default_buffer_size_multiplier = 5
+            # 5 -> 24。服务器 4096 环境上 PhysX 报：
+            #   "needs to increase PxgDynamicsMemoryConfig::foundLostAggregatePairsCapacity
+            #    to 19197268, otherwise the simulation will miss interactions"
+            # 这不是可以忽略的性能提示——广相缓冲放不下时碰撞对会被【直接丢弃】，
+            # 表现为脚触地漏判，进而 feet_contact / feet_air_time / foothold /
+            # feet_contact_forces 这几项奖励全部失真，严重时机器人穿过台阶。而且它
+            # 静默降级：除这行警告外训练照常跑、曲线看着正常，数据却是错的。
+            #
+            # Isaac Gym Preview 4 的 PhysXParams 没有暴露 foundLostAggregatePairsCapacity，
+            # 唯一能放大它的旋钮就是本乘数（它同比缩放 PhysX 的一整组 GPU 缓冲）。
+            # PhysX 基准容量 1048576，需求 19197268 => 需要 18.3 倍，取 24 留余量。
+            #
+            # 根因是机器人在空间上过于密集：num_rows*num_cols=100 块地形要放 4096 个
+            # 环境，平均每块 41 个机器人、各自只有 ±1m 出生抖动。虽然不同环境碰撞组
+            # 不同、彼此不会真接触，但广相仍要逐对枚举 AABB 重叠，是 O(N^2)。
+            # 因此另一条治本路线是加大 num_rows/num_cols 把机器人摊开（legged_gym 上游
+            # 用的是 10x20=200 块）——代价是地形网格更大。先用乘数解决正确性问题。
+            #
+            # 代价：显存占用上升（粗估 +0.5~1GB）。若显存吃紧，优先降 num_envs 或按上面
+            # 那条路线摊开地形，不要把这个值调回去——那是拿数据正确性换显存。
+            default_buffer_size_multiplier = 24
             contact_collection = 2 # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
 
 class LeggedRobotCfgPPO(BaseConfig):
