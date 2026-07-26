@@ -76,54 +76,72 @@ def directional_stairs(terrain, step_width, step_height, platform_size=1.5):
     k = np.where(d <= 0, 0, (d + sw - 1) // sw)     # 第几级台阶（平台=0，往 +x 递增）
     terrain.height_field_raw[:, :] = (k * sh)[:, None]
 
-def parkour_step_terrain(terrain, step_height, num_steps=6, half_valid_width=0.9,
-                         pad_height=0.5, run_up=1.5, x_noise=0.15, y_noise=0.25, rng=None):
+def parkour_step_terrain(terrain, step_height=0.2, platform_len=2.5, num_stones=8,
+                         x_range=(0.2, 0.4), y_range=(-0.15, 0.15),
+                         half_valid_width=(0.45, 0.5), pad_width=0.1, pad_height=0.5,
+                         rng=None):
     """Extreme Parkour(arXiv:2309.14341)的 parkour_step_terrain 复刻。
 
-    与本仓库原有的 directional_stairs 有三处本质区别，都是 Parkour 架构的要件：
-      1) 障碍只占据中央条带（沿 y 宽 2*half_valid_width），条带之外抬高 pad_height，
-         形成"不能横着绕开、也不会掉出地图"的软边界。EP 用的是 0.5m 的 y 向 pad。
-      2) 每级台阶上放一个 goal 路点，机器人被奖励**朝当前 goal 前进**，而不是
-         "跟随速度指令方向"。goal 落在障碍上，是"必须踩上去"这件事的来源。
-      3) 台阶位置/宽度带随机抖动，goal 随之移动，避免策略死记几何。
+    参数名与默认值取自 EP 源码本身（legged_gym/utils/terrain.py）：
+        platform_len=2.5, num_stones=8, x_range=[0.2,0.4], y_range=[-0.15,0.15],
+        half_valid_width=[0.45,0.5], step_height=0.2, pad_width=0.1, pad_height=0.5
 
-    返回 goals: (num_steps+2, 2)，单位是米、相对本块地形左下角。
-    goals[0] 在出生跑道上，goals[-1] 在末端平台，中间每级台阶一个。
+    两个容易搞反的要点（第一版复刻两条都错了，这里更正）：
+
+    1) x_range 是【每一级台阶沿 x 的长度】，只有 0.2~0.4m。配 step_height=0.2 就是
+       约 34 度的真陡楼梯。第一版把整块地形平分给 6 级、每级 1.6m，那不是楼梯，
+       是"每隔 1.6m 一个孤立台面"，完全不同的运动技能。
+
+    2) 通道之外保持【0 高度的低地】，不是墙。EP 只在整块地形的最外缘加一圈
+       pad_width=0.1m 宽、pad_height=0.5m 高的细边框防止掉出地图。防绕行不是靠墙
+       挡住，而是靠"goal 落在障碍上 + 绕出通道就得先下台阶再爬回来"，绕行本身
+       在 tracking_goal_vel 上就是亏的。第一版把通道两侧抬得比台阶还高，等于
+       Robot Parkour Learning 的走廊，那是另一篇论文的方案。
+
+    返回 goals: (num_stones+2, 2)，米，相对本块地形左下角；goals[0] 在起步平台上。
     """
     rng = rng or np.random
     hs, vs = terrain.horizontal_scale, terrain.vertical_scale
     nx, ny = terrain.height_field_raw.shape
     mid_y = ny // 2
-    half_w = int(half_valid_width / hs)
 
-    # y 向 pad：中央条带之外整体抬高，形成软墙（EP 的 pad_height=0.5m）
-    pad = int(pad_height / vs)
-    terrain.height_field_raw[:, :mid_y - half_w] = pad
-    terrain.height_field_raw[:, mid_y + half_w:] = pad
+    terrain.height_field_raw[:] = 0                      # 通道外恒为 0 高度的低地
+    goals = np.zeros((num_stones + 2, 2))
 
-    goals = np.zeros((num_steps + 2, 2))
-    x0 = int(run_up / hs)                      # 出生跑道，保持 0 高度
-    usable = nx - x0 - int(0.8 / hs)           # 末端留一小段平台
-    seg = max(1, usable // num_steps)
+    plat = int(platform_len / hs)
+    goals[0] = [(plat * 0.5) * hs, mid_y * hs]           # 起步平台中点
     sh = int(step_height / vs)
 
-    goals[0] = [(x0 * 0.5) * hs, mid_y * hs]   # 跑道中点
+    dis_x = plat
     cur_h = 0
-    for k in range(num_steps):
-        xs = x0 + k * seg + int(rng.uniform(-x_noise, x_noise) / hs)
-        xe = x0 + (k + 1) * seg
-        xs = max(x0, min(xs, nx - 1)); xe = max(xs + 1, min(xe, nx))
+    for k in range(num_stones):
+        run = int(rng.uniform(*x_range) / hs)            # 每级台阶的踏面长度(0.2~0.4m)
+        rand_y = int(rng.uniform(*y_range) / hs)
+        hw = int(rng.uniform(*half_valid_width) / hs)    # 该级的通道半宽
+        x0, x1 = dis_x, min(dis_x + run, nx)
+        if x0 >= nx:
+            goals[k + 1] = goals[k]
+            continue
         cur_h += sh
-        terrain.height_field_raw[xs:xe, mid_y - half_w:mid_y + half_w] = cur_h
-        gy = mid_y + int(rng.uniform(-y_noise, y_noise) / hs)
-        goals[k + 1] = [((xs + xe) * 0.5) * hs, gy * hs]
-    # 末端平台与最后一级同高，goal 落在它上面
-    terrain.height_field_raw[x0 + num_steps * seg:, mid_y - half_w:mid_y + half_w] = cur_h
-    goals[-1] = [(nx - int(0.4 / hs)) * hs, mid_y * hs]
-    # pad 必须始终高于台阶，否则失去软墙作用
-    top = terrain.height_field_raw[:, mid_y - half_w:mid_y + half_w].max()
-    terrain.height_field_raw[:, :mid_y - half_w] = top + pad
-    terrain.height_field_raw[:, mid_y + half_w:] = top + pad
+        y0 = max(0, mid_y + rand_y - hw)
+        y1 = min(ny, mid_y + rand_y + hw)
+        terrain.height_field_raw[x0:x1, y0:y1] = cur_h   # 只抬中央条带
+        goals[k + 1] = [((x0 + x1) * 0.5) * hs, (mid_y + rand_y) * hs]
+        dis_x = x1
+
+    # 末端平台与最后一级同高，最后一个 goal 落在它上面
+    hw = int(np.mean(half_valid_width) / hs)
+    if dis_x < nx:
+        terrain.height_field_raw[dis_x:, mid_y - hw:mid_y + hw] = cur_h
+    goals[-1] = [min(dis_x + int(0.5 / hs), nx - 1) * hs, mid_y * hs]
+
+    # EP 的 pad：只是最外缘一圈细边框，防止掉出地图，不是走廊墙
+    pw = max(1, int(pad_width / hs))
+    ph = int(pad_height / vs)
+    terrain.height_field_raw[:pw, :] = ph
+    terrain.height_field_raw[-pw:, :] = ph
+    terrain.height_field_raw[:, :pw] = ph
+    terrain.height_field_raw[:, -pw:] = ph
     return goals
 
 
@@ -376,10 +394,13 @@ class ParkourTerrain(HumanoidTerrain):
         self._pending_goals = parkour_step_terrain(
             terrain,
             step_height=sh,
-            num_steps=n_steps,
-            half_valid_width=getattr(c, 'parkour_half_valid_width', 0.9),
+            platform_len=getattr(c, 'parkour_platform_len', 2.5),
+            num_stones=self.num_goals - 2,
+            x_range=tuple(getattr(c, 'parkour_x_range', (0.2, 0.4))),
+            y_range=tuple(getattr(c, 'parkour_y_range', (-0.15, 0.15))),
+            half_valid_width=tuple(getattr(c, 'parkour_half_valid_width', (0.45, 0.5))),
+            pad_width=getattr(c, 'parkour_pad_width', 0.1),
             pad_height=getattr(c, 'parkour_pad_height', 0.5),
-            run_up=getattr(c, 'parkour_run_up', 1.5),
         )
         add_roughness(terrain, np.random.uniform(0.01, 0.03))
         return terrain

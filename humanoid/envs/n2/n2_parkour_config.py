@@ -27,9 +27,9 @@ class N2ParkourCfg(N2PerceptiveCfg):
         measure_heights = True
         max_init_terrain_level = 0
 
-        # EP 用 18m 的长通道。这里取 12m：既给足 8 个 goal 的间距（约 1.3m 一级），
-        # 又不至于让地形总面积（num_rows x num_cols 块）爆掉显存。
-        terrain_length = 12.
+        # EP 的块是 18m。这里 8m：起步平台 2.5m + 8 级台阶(每级 0.2~0.4m，共约 2.4m)
+        # + 末端平台，8m 绰绰有余，且地形总面积比 12m 小三分之一、显存更宽松。
+        terrain_length = 8.
         terrain_width = 4.
         num_rows = 10
         num_cols = 10
@@ -38,17 +38,23 @@ class N2ParkourCfg(N2PerceptiveCfg):
         # 所以 terrain_proportions 在这个任务里不起作用（保留以兼容基类构造）。
         terrain_proportions = [0., 0., 0., 0., 0., 0., 0., 1.0, 0.]
 
-        # 每块地形的 goal 数（含起点跑道和末端平台），中间 num_goals-2 级台阶
-        num_goals = 8
-        # 中央通道半宽(m)。EP 的 half_valid_width 是随机的；这里取定值 0.9 =>
-        # 通道宽 1.8m，接近 Robot Parkour Learning 的 1.6m 单行道
-        parkour_half_valid_width = 0.9
-        # 通道两侧抬高(m)，EP 的 pad_height=0.5
-        parkour_pad_height = 0.5
-        # 出生跑道长度(m)，机器人在这段平地上起步并正对第一级台阶
-        parkour_run_up = 1.5
-        # 台阶高度随难度从 5cm 线性升到 20cm（唯一的课程维度）
+        # ---- 以下取自 EP 源码 parkour_step_terrain 的默认值本身 ----
+        num_goals = 10                      # 起步平台 + 8 级台阶 + 末端平台 = EP 的 num_stones=8
+        parkour_platform_len = 2.5          # EP: platform_len=2.5
+        parkour_x_range = (0.2, 0.4)        # EP: x_range=[0.2,0.4]，每级台阶的踏面长度
+        parkour_y_range = (-0.15, 0.15)     # EP: y_range=[-0.15,0.15]
+        parkour_pad_width = 0.1             # EP: pad_width=0.1，最外缘细边框
+        parkour_pad_height = 0.5            # EP: pad_height=0.5
+        # 台阶高度随难度从 5cm 线性升到 EP 的 20cm（唯一的课程维度）
         parkour_step_height_range = [0.05, 0.20]
+
+        # ---- 唯一因机器人形态而偏离 EP 的一项 ----
+        # EP 的 half_valid_width=[0.45,0.5] ⇒ 通道宽 0.9~1.0m，是给 A1 四足（体宽约
+        # 0.3m）设计的。N2 是人形，双脚横向间距加上摆动余量远超四足，0.9m 通道会让
+        # 它频繁踩空到通道外的低地。这里放宽到 [0.7,0.8] ⇒ 通道宽 1.4~1.6m，
+        # 与 Robot Parkour Learning 给四足用的 1.6m 单行道同量级，按人形比例是合适的。
+        # 若发现机器人仍在通道外行走，再收窄回 EP 的原值。
+        parkour_half_valid_width = (0.7, 0.8)
         # 出生点抖动(m)
         parkour_spawn_jitter = 0.3
         # 课程：走到第几个 goal 才升级 / 不足几个就降级
