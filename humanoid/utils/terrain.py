@@ -280,9 +280,15 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
     "踏石"地形：练的是离散落脚点的选择与跨越，而不是踝部适应斜面。
 
     【板子尺寸随难度缩小才是落脚点任务】0.9x1.0m 是脚(0.20x0.10m)面积的 45 倍，站
-    哪儿都行，那练的其实只是"跨过 0.1~0.4m 的缝"。缩到 0.45x0.50m 时单脚周围只剩
-    ±0.125/±0.200m 余量，才真的要挑落脚点。再小就撞地形分辨率了：horizontal_scale
-    =0.1m，0.25m 的梅花桩只有 2x2 个格子，高度图根本表达不出桩子的边。
+    哪儿都行，那练的其实只是"跨过缝"。缩到 0.45x0.50m 时单脚周围只剩 ±0.125/±0.200m
+    余量，才真的要挑落脚点。
+
+    【这不是"一脚一块"的梅花桩，当前分辨率下也做不到】N2 实测摆动距离 0.282m、步长
+    0.129m、步宽 0.199m，所以一脚一块要求石块 x 间距 ~0.14m、横向偏置 ~±0.10m。而
+    0.14m 在 horizontal_scale=0.1m 下只有 1.4 个格子，高度图物理上表达不出来(脚本身
+    0.20x0.10m 也才 2x1 格)。本函数生成的 x 间距是 0.5~1.0m，即每块石头上要走 4~7 步，
+    练的是"缝的两侧要落准 + 横向换脚"，不是逐桩点足。真梅花桩需要把 horizontal_scale
+    降到 0.025m，属于另开任务，见计划文件。
 
     整块地形是深 pit_depth 的坑，只有踏石和首尾平台是实的；踏石沿 y 交替偏置
     ±y_range，所以必须左右换脚而不能一条直线走过去。
@@ -304,7 +310,11 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
     sl = max(1, int(round(stone_len / hs)))
     wc = max(2, int(round(stone_width / hs)))            # 板宽(格)
     terrain.height_field_raw[:plat, :] = 0
-    goals[0] = [max(plat - 1, 0) * hs, mid_y * hs]
+    # 【出生点放平台中点，不是平台边缘】_reset_root_states 会在 goals[0] 上叠加
+    # ±parkour_spawn_jitter(0.3m) 的 xy 抖动。放在 plat-1(=2.4m) 距平台末端只剩 0.1m，
+    # 实测 6.7% 的出生点直接落到坑上、最深掉 0.52m。跨栏/平地放边缘无所谓(平台外是
+    # 0 高度平地)，踏石平台外是坑，必须留够余量。plat/2 留 1.25m，远大于抖动幅度。
+    goals[0] = [(plat * 0.5) * hs, mid_y * hs]
 
     dis_x = plat
     side = rng.randint(0, 2)                             # 交替左右
