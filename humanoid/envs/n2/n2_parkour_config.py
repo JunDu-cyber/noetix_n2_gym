@@ -37,7 +37,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
 
 
         # ParkourTerrain.TYPES：[上台阶, 下台阶, 跨栏, 平地路点, 踏石]。
-        terrain_proportions = [0.3, 0.3, 0.2, 0.1, 0.1]
+        terrain_proportions = [0.3, 0.2, 0.2, 0.1, 0.2]
 
         # ---- 台阶级数与 goal 分布(索引 0/1 共用) ----
         # 18 级正好是真实楼层的一个梯段(一层约 3m / 16~18 级)。级数与 goal 数解耦：
@@ -71,7 +71,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
         parkour_stone_y_range = (0.10, 0.18)  # 左右交替偏置，逼迫换脚
         parkour_stone_pit_depth = 0.5       # EP 到 1.0m，双足摔下去代价太大，减半
 
-        measured_points_x = [-0.40, -0.25, -0.10, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 1.00, 1.15, 1.30]
+        measured_points_x = [-0.40, -0.25, -0.10, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
 
         # ---- 以下取自 EP 源码 parkour_step_terrain 的默认值本身 ----
         num_goals = 10                      # 起步平台 + 8 级台阶 + 末端平台 = EP 的 num_stones=8
@@ -116,10 +116,10 @@ class N2ParkourCfg(N2PerceptiveCfg):
         zero_vx_prob = 0.0
         zero_wz_prob = 0.0
         # 前进速度下限(m/s)
-        parkour_min_vx = 0.3
+        parkour_min_vx = 0.15
 
         class ranges(N2PerceptiveCfg.commands.ranges):
-            lin_vel_x = [0.3, 0.8]
+            lin_vel_x = [0.2, 0.6]
             lin_vel_y = [0.0, 0.0]      # EP: lin_vel_y=[0,0]
             ang_vel_yaw = [0.0, 0.0]    # EP: ang_vel_yaw=[0,0]
 
@@ -137,12 +137,12 @@ class N2ParkourCfg(N2PerceptiveCfg):
         stumble_stance_force = 80.0     # Fz 低于此值才算"摆动中、还没承重"
         #   摆动相 Fxy p90=16.8N 是正常噪声，p99=265N 才是真撞上
         stumble_min_force = 20.0        # 噪声门限
-        stumble_ref_force = 200.0       # 归一化参考，使单脚原始值落在 [0,1]
+        stumble_ref_force = 150.0       # 归一化参考，使单脚原始值落在 [0,1]
 
         class scales(N2PerceptiveCfg.rewards.scales):
 
-            tracking_goal_vel = 3.2
-            tracking_yaw = 0.5          # EP: tracking_yaw = 0.5
+            tracking_goal_vel = 3.5
+            tracking_yaw = 0.8          # EP: tracking_yaw = 0.5
             goal_reached = 0.0          # 非 EP 项，默认关闭
 
 
@@ -158,6 +158,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
             tracking_ang_vel = 0.3
 
             stumble = -6.0
+            foothold = -1.5
 
 
 class N2ParkourCfgPPO(N2PerceptiveCfgPPO):

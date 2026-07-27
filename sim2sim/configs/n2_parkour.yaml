@@ -40,7 +40,7 @@ height_clip: 1.0
 
 # Height sample grid in the base frame (x outer, y inner -> 12*8=96), copied
 # from N2ParkourCfg.terrain measured_points_x / measured_points_y.
-measured_points_x: [-0.40, -0.25, -0.10, 0.10, 0.25, 0.40, 0.55, 0.70, 0.85, 1.00, 1.15, 1.30]
+measured_points_x: [-0.40, -0.25, -0.10, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
 # measured_points_x: [-0.30, -0.15, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90, 1.05, 1.20, 1.35, 1.50]
 measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 
@@ -127,6 +127,6 @@ goal_pass_lateral_tol: 0.5
 # goal 模式：
 #   waypoints —— 用上面 goal_first_x/spacing/count 生成的固定路点（可复现的爬楼测试）
 #   carrot    —— 方向键牵引的世界系目标点（胡萝卜）
-goal_mode: carrot
+goal_mode: waypoints
 carrot_lookahead: 1.5    # 胡萝卜每次自动前移的距离(m)
 carrot_step: 0.15        # 单次按键挪动量(m)
