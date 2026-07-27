@@ -39,8 +39,12 @@ base_height_offset: 0.698
 height_clip: 1.0
 
 # Height sample grid in the base frame (x outer, y inner -> 12*8=96), copied
-# from N2_10dof_Cfg.terrain measured_points_x / measured_points_y
-measured_points_x: [-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+# from N2ParkourCfg.terrain measured_points_x / measured_points_y.
+# 【必须与训练配置逐值一致】点数一样、位置不一样是【静默错误】：num_single_obs 的
+# 断言只查 12*8=96 这个数量，查不出采样位置，策略照常跑但读到的是别处的地形高度。
+# x 已随训练前移到 [-0.3, 1.35]（原来是 [-0.6, 0.6]，只看到身前 0.6m，
+# 而跨栏间距 1.2~1.8m，等于快撞上才看见）。
+measured_points_x: [-0.3, -0.15, 0.0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.05, 1.2, 1.35]
 measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 
 cmd_init: [0, 0, 0]
@@ -60,8 +64,12 @@ goal_count: 20
 # 也可以直接写死路点（世界坐标，[[x,y],...] 或 [[x,y,z],...]），会覆盖上面三项：
 # goals: [[1.125, 0.0], [1.375, 0.0], ...]
 
-# 到达半径(m)，与 N2ParkourCfg.rewards.goal_reach_dist 保持一致
-goal_reach_dist: 0.5
+# 到达半径(m)，与 N2ParkourCfg.rewards.goal_reach_dist 保持一致。
+# 【必须小于 goal_spacing】否则指针连跳：站在第 k 个 goal 上时第 k+1 个已经在圈内，
+# 每个控制步推进一格，目标被顶到两三级台阶之外，Δψ 的语义就和训练时不是一回事了。
+# 训练侧同样的耦合由 N2ParkourEnv._check_goal_reach_consistency 强制。
+# 原来写 0.5 而 goal_spacing 只有 0.25，正好踩中；训练侧早已降到 0.15，这里漏了。
+goal_reach_dist: 0.15
 
 # goal 模式：
 #   waypoints —— 用上面 goal_first_x/spacing/count 生成的固定路点（可复现的爬楼测试）
