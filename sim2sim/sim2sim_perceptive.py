@@ -95,7 +95,68 @@ def terrain_height_at(model, data, points_xy, ray_start_z=10.0, max_body_skips=4
         heights[i] = z_hit
     return heights
 
-def get_height_scan(model, data, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale):
+class TerrainHF:
+    """静态地形高度图 + Isaac 同款采样，用来复刻训练侧高度扫描的【特权】语义。
+
+    为什么不能继续每步打射线：
+      1) 遮挡。Isaac 的 _get_heights(legged_robot.py:1012) 根本不做碰撞查询，它是对
+         terrain.heightsamples(地形生成时就建好的静态数组)做纯数组索引，机器人在那个
+         数组里没有表示，所以【不可能】扫到自己。MuJoCo 的射线会打到机器人身上：
+         geom group 区分不了(地形全在 group 0，机器人横跨 0 和 1)，bodyexclude 又只能
+         排除一个 body，机器人有 42 个 geom。
+      2) 语义。Isaac 不取精确表面，而是 floor 到 horizontal_scale 的格子、再取
+         (i,j)/(i+1,j)/(i,j+1) 三者的【最小值】(故意保守)。射线给的是精确表面，两者
+         在台阶边沿差一整级：实测 x=1.26~1.30 处射线读 0.200 而 Isaac 读 0.100。
+         这个偏差恰好落在爬楼最吃紧的位置上。
+
+    做法：启动时把机器人整体抬到高空、mj_forward、对整片区域打一次射线建成高度图，
+    再把机器人放回来。之后每步只查数组——既没有遮挡，又和 Isaac 逐位同语义，而且
+    每步的射线数从 96 降到 0。
+    """
+
+    def __init__(self, model, data, horizontal_scale=0.1, vertical_scale=0.005,
+                 pad=6.0, lift=1000.0):
+        self.hs, self.vs = horizontal_scale, vertical_scale
+        # 覆盖范围取所有静态(worldbody)非平面 geom 的 AABB 再外扩 pad；平面是无限大的，
+        # 不参与 AABB，靠 pad 兜住机器人走出地形之后的区域。
+        lo = np.array([-pad, -pad], dtype=float)
+        hi = np.array([pad, pad], dtype=float)
+        for g in range(model.ngeom):
+            if model.geom_bodyid[g] != 0 or model.geom_type[g] == mujoco.mjtGeom.mjGEOM_PLANE:
+                continue
+            c, s = model.geom_pos[g][:2], model.geom_size[g][:2]
+            lo = np.minimum(lo, c - s - pad)
+            hi = np.maximum(hi, c + s + pad)
+        self.x0, self.y0 = float(lo[0]), float(lo[1])
+        nx = int(np.ceil((hi[0] - lo[0]) / self.hs)) + 2
+        ny = int(np.ceil((hi[1] - lo[1]) / self.hs)) + 2
+
+        qsave = data.qpos.copy()
+        data.qpos[2] += lift                       # 机器人离场，射线只可能打到地形
+        mujoco.mj_forward(model, data)
+        gx = self.x0 + np.arange(nx) * self.hs
+        gy = self.y0 + np.arange(ny) * self.hs
+        pts = np.stack(np.meshgrid(gx, gy, indexing='ij'), axis=-1).reshape(-1, 2)
+        raw = terrain_height_at(model, data, pts).reshape(nx, ny)
+        data.qpos[:] = qsave
+        mujoco.mj_forward(model, data)
+        # 复刻 Isaac 的 int16 高度量化(height_field_raw 以 vertical_scale 为单位)
+        self.hf = np.round(raw / self.vs).astype(np.int32)
+        print('[terrain] 静态高度图 %dx%d @ %.3fm，覆盖 x[%.1f, %.1f] y[%.1f, %.1f]'
+              % (nx, ny, self.hs, self.x0, self.x0 + nx * self.hs,
+                 self.y0, self.y0 + ny * self.hs))
+
+    def sample(self, points_xy):
+        """与 legged_robot._get_heights 逐行等价：floor 取格 + 三格取最小 + 边界裁剪。"""
+        idx = np.floor((points_xy - np.array([self.x0, self.y0])) / self.hs).astype(int)
+        px = np.clip(idx[:, 0], 0, self.hf.shape[0] - 2)
+        py = np.clip(idx[:, 1], 0, self.hf.shape[1] - 2)
+        h = np.minimum(np.minimum(self.hf[px, py], self.hf[px + 1, py]),
+                       self.hf[px, py + 1])
+        return h * self.vs
+
+
+def get_height_scan(hf, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale):
     '''Yaw-rotates + translates the base-frame height_points grid into world
     space, samples terrain height under each point, and returns the scaled
     relative-height observation. Mirrors N2PerceptiveEnv.compute_observations()
@@ -105,11 +166,11 @@ def get_height_scan(model, data, base_xyz, quat, height_points, base_height_offs
     cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
     world_x = base_xyz[0] + height_points[:, 0] * cos_yaw - height_points[:, 1] * sin_yaw
     world_y = base_xyz[1] + height_points[:, 0] * sin_yaw + height_points[:, 1] * cos_yaw
-    terrain_h = terrain_height_at(model, data, np.stack([world_x, world_y], axis=-1))
+    terrain_h = hf.sample(np.stack([world_x, world_y], axis=-1))
     heights = np.clip(base_xyz[2] - base_height_offset - terrain_h, -height_clip, height_clip)
     return heights * height_measurements_scale
 
-def get_height_points_world(model, data, base_xyz, quat, height_points):
+def get_height_points_world(hf, base_xyz, quat, height_points):
     '''World-space (x, y, z) of every height-scan sample point, z = the
     sampled terrain height under it. Same yaw-rotation as get_height_scan,
     kept separate since debug markers want raw terrain height (not the
@@ -118,7 +179,7 @@ def get_height_points_world(model, data, base_xyz, quat, height_points):
     cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
     world_x = base_xyz[0] + height_points[:, 0] * cos_yaw - height_points[:, 1] * sin_yaw
     world_y = base_xyz[1] + height_points[:, 0] * sin_yaw + height_points[:, 1] * cos_yaw
-    world_z = terrain_height_at(model, data, np.stack([world_x, world_y], axis=-1))
+    world_z = hf.sample(np.stack([world_x, world_y], axis=-1))
     return np.stack([world_x, world_y, world_z], axis=-1)  # (S, 3)
 
 def run_mujoco(cfg):
@@ -190,6 +251,10 @@ def run_mujoco(cfg):
     data.qpos[7:] = defaut_dof_pos
 
     mujoco.mj_step(model, data)
+    # 静态地形高度图：一次性建好，之后每步只查数组(见 TerrainHF)
+    hf = TerrainHF(model, data,
+                   horizontal_scale=config.get('terrain_horizontal_scale', 0.1),
+                   vertical_scale=config.get('terrain_vertical_scale', 0.005))
     viewer = mujoco_viewer.MujocoViewer(model, data)
 
     target_q = np.zeros((num_actions), dtype=np.double)
@@ -224,9 +289,9 @@ def run_mujoco(cfg):
             obs[0, 9 + num_actions:9 + num_actions * 2] = dq * dof_vel_scale
             obs[0, 9 + num_actions * 2:9 + num_actions * 3] = action
             obs[0, 9 + num_actions * 3:] = get_height_scan(
-                model, data, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale)
+                hf, base_xyz, quat, height_points, base_height_offset, height_clip, height_measurements_scale)
             if debug_viz:
-                height_marker_world[:] = get_height_points_world(model, data, base_xyz, quat, height_points)
+                height_marker_world[:] = get_height_points_world(hf, base_xyz, quat, height_points)
 
             hist_obs.append(obs)
             hist_obs.popleft()

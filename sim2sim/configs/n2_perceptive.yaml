@@ -43,6 +43,14 @@ height_clip: 1.0
 measured_points_x: [-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 
+# 地形高度图的量化尺度，【必须与训练侧 terrain.horizontal_scale / vertical_scale 一致】。
+# sim2sim 启动时会把机器人抬到高空、对整片地形打一次射线建成静态高度图，之后每步只查
+# 数组——这样才能复刻 Isaac 的两个语义：(a) 扫描永远看不到机器人自己(Isaac 是对静态
+# height_field_raw 做数组索引，根本不做碰撞查询)；(b) 采样是 floor 到格子再取
+# (i,j)/(i+1,j)/(i,j+1) 三者最小值，而不是精确表面——两者在台阶边沿差一整级。
+terrain_horizontal_scale: 0.1
+terrain_vertical_scale: 0.005
+
 cmd_init: [0, 0, 0]
 
 # Draw the height-scan grid (yellow spheres) in the MuJoCo viewer, matching
