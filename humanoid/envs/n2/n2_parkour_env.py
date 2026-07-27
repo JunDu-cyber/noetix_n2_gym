@@ -70,8 +70,41 @@ class N2ParkourEnv(N2PerceptiveEnv):
                 "goal_reach_dist=%.3f 必须 < 各地形类型的最小 goal 间距 %.3f，"
                 "否则相邻 goal 落在到达半径内、指针连跳导致课程虚高" % (reach, gap))
 
+    def _check_spawn_clearance(self, max_drop=0.15, samples=64):
+        """出生点抖动之后必须仍落在实地上。
+
+        goals[0] 由地形函数决定、抖动幅度由 terrain 配置决定，两者分处不同文件，改一边
+        很容易忘掉另一边——踏石就踩过：goals[0] 放在平台边缘(离末端 0.1m)，配 ±0.3m 抖动
+        后 6.7% 的出生点直接落到坑上、最深掉 0.52m，而机器人还是按平台高度摆的，等于每
+        次 reset 都从半空掉进沟里。这里在构造时把这个跨段耦合钉死。
+        """
+        jit = getattr(self.cfg.terrain, 'parkour_spawn_jitter', 0.0)
+        if jit <= 0 or not hasattr(self.terrain, 'height_field_raw'):
+            return
+        hs = self.cfg.terrain.horizontal_scale
+        vs = self.cfg.terrain.vertical_scale
+        border = int(self.cfg.terrain.border_size / hs)
+        hf = self.terrain.height_field_raw
+        g0 = self.terrain.goals[:, :, 0, :]                      # (rows, cols, 3)
+        # 角点最危险，直接取抖动方框的边界网格
+        off = np.linspace(-jit, jit, int(np.sqrt(samples)))
+        dx, dy = np.meshgrid(off, off, indexing='ij')
+        px = np.clip(((g0[..., None, None, 0] + dx) / hs).astype(int) + border,
+                     0, hf.shape[0] - 1)
+        py = np.clip(((g0[..., None, None, 1] + dy) / hs).astype(int) + border,
+                     0, hf.shape[1] - 1)
+        drop = hf[px, py] * vs - g0[..., None, None, 2]
+        worst = float(drop.min())
+        if worst < -max_drop:
+            i, j = np.unravel_index(np.argmin(drop.min(axis=(2, 3))), drop.shape[:2])
+            raise ValueError(
+                "出生点抖动 ±%.2fm 会把机器人扔到比 goals[0] 低 %.2fm 的地方"
+                "(最差在 row %d / col %d)。把该地形的 goals[0] 往平台内挪，"
+                "或调小 terrain.parkour_spawn_jitter。" % (jit, -worst, i, j))
+
     def _init_goal_buffers(self):
         self._check_goal_reach_consistency()
+        self._check_spawn_clearance()
         # (num_rows, num_cols, num_goals, 3) 的世界坐标路点表
         self.terrain_goals = torch.tensor(self.terrain.goals, dtype=torch.float,
                                           device=self.device, requires_grad=False)

@@ -310,7 +310,11 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
     sl = max(1, int(round(stone_len / hs)))
     wc = max(2, int(round(stone_width / hs)))            # 板宽(格)
     terrain.height_field_raw[:plat, :] = 0
-    goals[0] = [max(plat - 1, 0) * hs, mid_y * hs]
+    # 【出生点放平台中点，不是平台边缘】_reset_root_states 会在 goals[0] 上叠加
+    # ±parkour_spawn_jitter(0.3m) 的 xy 抖动。放在 plat-1(=2.4m) 距平台末端只剩 0.1m，
+    # 实测 6.7% 的出生点直接落到坑上、最深掉 0.52m。跨栏/平地放边缘无所谓(平台外是
+    # 0 高度平地)，踏石平台外是坑，必须留够余量。plat/2 留 1.25m，远大于抖动幅度。
+    goals[0] = [(plat * 0.5) * hs, mid_y * hs]
 
     dis_x = plat
     side = rng.randint(0, 2)                             # 交替左右
