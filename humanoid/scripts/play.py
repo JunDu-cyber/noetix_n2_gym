@@ -31,22 +31,25 @@ PLAY_TILE_STEPS = 600        # 自动轮换时每格停留的步数
 
 
 def is_parkour(task):
-    """n2_parkour 用的是 ParkourTerrain，与 HumanoidTerrain 的地形分派规则完全不同：
-    它恒定生成 parkour_step_terrain，terrain_proportions 不起作用，所有列都是同一种
-    地形，难度只由行(台阶高度)决定。play 里凡是依赖 proportions 的地方都要分开处理。"""
+    """n2_parkour 用的是 ParkourTerrain，它的 terrain_proportions 索引含义与
+    HumanoidTerrain 那套 9 槽完全不同(见 ParkourTerrain.TYPES)，所以 play 里凡是
+    依赖 proportions 的地方都要分开处理。"""
     return str(task).startswith('n2_parkour')
 
 
-def terrain_column_names(proportions, num_cols):
+HUMANOID_TILE_NAMES = ['平地+粗糙', '离散障碍', '均匀粗糙', '上坡', '下坡',
+                       '金字塔上楼梯', '金字塔下楼梯', '直行上楼梯', '直行下楼梯']
+
+
+def terrain_column_names(proportions, num_cols, names=None):
     """列号 -> 地形类型名。
 
-    复刻 HumanoidTerrain.make_terrain (humanoid/utils/terrain.py:224) 的 elif
-    链，choice 取值与 Terrain.curiculum() 里的 j/num_cols + 0.001 一致，所以
-    打印出来的就是每一列实际生成的地形。
+    复刻 make_terrain 的 elif 链，choice 取值与 Terrain.curiculum() 里的
+    j/num_cols + 0.001 一致，所以打印出来的就是每一列实际生成的地形。
+    names 缺省是 HumanoidTerrain 的 9 槽；parkour 传 ParkourTerrain.TYPES。
     """
     cum = [float(np.sum(proportions[:i + 1])) for i in range(len(proportions))]
-    names = ['平地+粗糙', '离散障碍', '均匀粗糙', '上坡', '下坡',
-             '金字塔上楼梯', '金字塔下楼梯', '直行上楼梯', '直行下楼梯']
+    names = names or HUMANOID_TILE_NAMES
     out = []
     for j in range(num_cols):
         choice = j / num_cols + 0.001
@@ -114,7 +117,9 @@ def play(args):
     env_cfg.sim.physx.max_gpu_contact_pairs = 2**10  # 设置GPU接触对的最大数量
     env_cfg.terrain.mesh_type = 'trimesh'  # 设置地形类型为
     env_cfg.terrain.num_rows = 8  # 设置地形行数
-    env_cfg.terrain.num_cols = 8  # 设置地形列数
+    # parkour 保持 10 列：类型按 j/num_cols 分派，配比里最小的一档是 0.1，
+    # 列数少于 10 时它会被整除抹掉(8 列时踏石那一列根本不会生成)。
+    env_cfg.terrain.num_cols = 10 if is_parkour(args.task) else 8
     # 必须打开：否则 Terrain 走 randomized_terrain()，每格类型和难度都随机，既
     # 选不中也复现不了。建完环境后会立刻改回 False（见下面）。
     env_cfg.terrain.curriculum = True
@@ -122,8 +127,8 @@ def play(args):
     # 必须 9 项：7 项时 cumsum 在 index 6 就到 1.0，永远走不到 index 7/8 的直行楼梯
     if not is_parkour(args.task):
         env_cfg.terrain.terrain_proportions = [0., 0.0, 0.1, 0.0, 0.0, 0.05, 0.2, 0.2, 0.15]
-    # parkour 的 terrain_proportions 是占位值，ParkourTerrain 恒定生成同一种地形，
-    # 覆盖它没有意义；列数也不必是 8——所有列一样，多留几行难度更有用。
+    # parkour 的 proportions 用 config 里的原值(索引含义是 ParkourTerrain.TYPES)，
+    # 覆盖会打乱列->类型的对应关系。
     # env_cfg.terrain.selected = True
     # env_cfg.terrain.terrain_kwargs = {'type': 'pyramid_stairs_terrain',
     #                                   'step_width': 0.30,
@@ -165,13 +170,19 @@ def play(args):
     env.cfg.terrain.curriculum = False
 
     if is_parkour(args.task):
+        from humanoid.utils.terrain import ParkourTerrain
         hr = getattr(env_cfg.terrain, 'parkour_step_height_range', [0.05, 0.20])
-        tile_names = ['parkour 通道(各列同型，仅随机种子不同)'] * env_cfg.terrain.num_cols
-        print('\n[play] parkour 地形 %d 行(难度=台阶高度) x %d 列(同型):'
+        tile_names = terrain_column_names(env_cfg.terrain.terrain_proportions,
+                                          env_cfg.terrain.num_cols,
+                                          ParkourTerrain.TYPES)
+        print('\n[play] parkour 地形 %d 行(难度) x %d 列(类型):'
               % (env_cfg.terrain.num_rows, env_cfg.terrain.num_cols))
+        for j, nm in enumerate(tile_names):
+            print('       col %d : %s' % (j, nm))
         for i in range(env_cfg.terrain.num_rows):
             d = i / env_cfg.terrain.num_rows
-            print('       row %d : 台阶高 %.1f cm' % (i, 100 * (hr[0] + d * (hr[1] - hr[0]))))
+            print('       row %d : 台阶高 %.1f cm(台阶列)' %
+                  (i, 100 * (hr[0] + d * (hr[1] - hr[0]))))
     else:
         tile_names = terrain_column_names(env_cfg.terrain.terrain_proportions,
                                           env_cfg.terrain.num_cols)

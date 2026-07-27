@@ -27,14 +27,47 @@ class N2ParkourCfg(N2PerceptiveCfg):
         measure_heights = True
         max_init_terrain_level = 0
 
-        # 起步平台 2.5m + 8 级台阶(约 2.4m) + 末端平台，8m 足够(EP 用 18m)。
-        terrain_length = 8.
+        # 与 EP 同为 18m。台阶类只用到约 5.7m(2.5 平台 + 8 级)，其余是末端平台——EP
+        # 自己也是这样。但跨栏/踏石的障碍间距 1.2~1.8m x 8 装不进 8m 的块，末尾几个
+        # goal 会被挤重合，而重合的 goal 会让 _update_goals 一步连推两格、课程虚高。
+        terrain_length = 18.
         terrain_width = 4.
         num_rows = 10
         num_cols = 10
 
-        # ParkourTerrain 恒定生成 parkour_step_terrain，此项不起作用(仅兼容基类构造)。
-        terrain_proportions = [0., 0., 0., 0., 0., 0., 0., 1.0, 0.]
+        # 【parkour 专属索引】与 HumanoidTerrain 那套 9 槽无关，含义见
+        # ParkourTerrain.TYPES：[上台阶, 下台阶, 跨栏, 平地路点, 踏石]。
+        # 列数 10，所以每 0.1 恰好一列：上台阶 3 列(已验证过的主力)、下台阶 2、
+        # 跨栏 2、平地路点 2、踏石 1(唯一带坑的类型，先只给一条课程梯子)。
+        terrain_proportions = [0.3, 0.2, 0.2, 0.2, 0.1]
+
+        # ---- 下台阶(索引 1) ----
+        # 通道外压到最深一级台阶再往下这么多(m)。必须有：上楼时通道高于外面的 0 高度
+        # 低地，绕行要先下再爬回来本身就亏；下楼时通道沉到 0 以下，那块低地反而成了
+        # 比通道更高的平台，爬出去沿边沿走到终点照样拿 goal 奖励，绕行由亏变赚。
+        parkour_stepdown_outside_margin = 0.3
+
+        # ---- 跨栏 / 平地路点(索引 2/3) ----
+        parkour_hurdle_len = 0.3            # 沿 x 的厚度：够厚才能踩上去而不必跳
+        parkour_hurdle_x_range = (1.2, 1.8) # EP 是 (1.2,2.2)，收窄以塞进 18m
+        parkour_hurdle_y_range = (-0.4, 0.4)
+        parkour_hurdle_half_valid_width = (0.4, 0.8)
+        # 难度 0 -> 1 的栏高(m)。EP 顶到 0.40，这里封在 0.30：N2 髋高约 0.6m，
+        # 0.4m 的栏已经是抬腿到髋，先把梯子架在够得着的高度。
+        parkour_hurdle_height_range = [0.10, 0.30]
+
+        # ---- 踏石(索引 4) ----
+        parkour_stone_len = 0.9
+        parkour_stone_width = 1.0
+        parkour_stone_gap_range = [0.1, 0.4]
+        parkour_stone_y_range = (0.2, 0.4)  # 左右交替偏置，逼迫换脚
+        parkour_stone_pit_depth = 0.5       # EP 到 1.0m，双足摔下去代价太大，减半
+
+        # 高度扫描前移。基类继承来的是 [-0.6..0.6]，只看到身前 0.6m；跨栏间距
+        # 1.2~1.8m，0.6m 的前瞻等于快撞上才看见。仍是 12 个点 -> n_scan 仍是 96 ->
+        # num_single_obs 仍是 137，网络与 sim2sim 的形状都不用动。EP 用 [-0.45..1.2]。
+        measured_points_x = [-0.3, -0.15, 0., 0.15, 0.3, 0.45,
+                             0.6, 0.75, 0.9, 1.05, 1.2, 1.35]
 
         # ---- 以下取自 EP 源码 parkour_step_terrain 的默认值本身 ----
         num_goals = 10                      # 起步平台 + 8 级台阶 + 末端平台 = EP 的 num_stones=8

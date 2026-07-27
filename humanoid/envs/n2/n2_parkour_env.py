@@ -61,12 +61,14 @@ class N2ParkourEnv(N2PerceptiveEnv):
         的下限只有 0.2m，结果 78% 的相邻 goal 落在到达半径内，课程一路虚高到
         terrain_level 6.3 而策略在 8.8cm 台阶只有 11% 存活。
         """
-        xr = getattr(self.cfg.terrain, 'parkour_x_range', (0.2, 0.4))
+        # 最小间距是【所有启用地形类型】里最小的那个，不能只看台阶——多地形混训后
+        # 台阶不一定还是最紧的那一种，写死 parkour_x_range 会漏掉新类型。
+        gap = self.terrain.min_goal_spacing()
         reach = self.cfg.rewards.goal_reach_dist
-        if reach >= float(xr[0]):
+        if gap > 0 and reach >= gap:
             raise ValueError(
-                "goal_reach_dist=%.3f 必须 < parkour_x_range 下限 %.3f，"
-                "否则相邻 goal 落在到达半径内、指针连跳导致课程虚高" % (reach, xr[0]))
+                "goal_reach_dist=%.3f 必须 < 各地形类型的最小 goal 间距 %.3f，"
+                "否则相邻 goal 落在到达半径内、指针连跳导致课程虚高" % (reach, gap))
 
     def _init_goal_buffers(self):
         self._check_goal_reach_consistency()
