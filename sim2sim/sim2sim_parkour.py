@@ -192,8 +192,17 @@ def run_mujoco(cfg_name, command, carrot=None):
                 to_goal = cur_xyz[:2] - base_xyz[:2]
             else:
                 # ---- goal 推进：复刻 N2ParkourEnv._update_goals ----
+                # 【两个条件缺一不可】此前这里只有 (a)，靠 goal_reach_dist=0.5 的大圈
+                # 兜着才没出事；把半径对齐训练值 0.15 之后立刻暴露：机器人擦过 goal
+                # 而没进圈，goal 留在身后，to_goal 掉头指向后方，Δψ 变成 ~180°，
+                # 策略掉头往回走，整条通道就走不下去。训练侧 _update_goals 的注释
+                # 原样预言了这个故障，只是当时没搬过来。
+                #   (a) 进到 reach 半径内；
+                #   (b) 已【越过】该 goal(x 为负)且横向没跑出通道(|dy| < lateral_tol)。
                 to_goal = goals[cur_goal, :2] - base_xyz[:2]
-                if np.linalg.norm(to_goal) < goal_reach_dist and cur_goal < len(goals) - 1:
+                passed = to_goal[0] < 0 and abs(to_goal[1]) < goal_pass_lateral_tol
+                if (np.linalg.norm(to_goal) < goal_reach_dist or passed) \
+                        and cur_goal < len(goals) - 1:
                     cur_goal += 1
                     reached += 1
                     to_goal = goals[cur_goal, :2] - base_xyz[:2]
