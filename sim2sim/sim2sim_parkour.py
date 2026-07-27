@@ -266,7 +266,7 @@ def run_mujoco(cfg_name, command, carrot=None):
     tail = f"到达 {reached} 个 goal，" if goals is not None else ""
     print(f"\n[parkour] 结束：{tail}最终 x={data.qpos[0]:.2f} z={data.qpos[2]:.2f}")
 
-
+#TODO: add more terrains and align height map
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
