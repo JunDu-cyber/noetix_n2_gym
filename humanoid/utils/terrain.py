@@ -88,7 +88,30 @@ def _pad_edges(terrain, pad_width, pad_height):
     terrain.height_field_raw[:, -pw:] = ph
 
 
+def step_goal_indices(num_steps, num_goals, power=2.0):
+    """goal 落在第几级台阶：间隔按幂律递增，前几级仍是一级一个。
+
+    台阶数与 goal 数必须解耦，因为 goals 表对所有地形类型形状固定(num_goals=10)，
+    而楼梯想要 16~20 级才够一个真实梯段。均匀撒 goal 会让最开始几级也拉开到 2~3 级
+    一个，等于起步阶段没有引导；全部一级一个又只能有 8 级。幂律两头都照顾到：
+    起步密（每级都有反馈），后面疏（让梯段长起来）。
+
+    返回 1-based 的台阶序号，严格递增，最后一个恒等于 num_steps。
+    18 级 / 8 个 goal / power=2 -> [1,2,3,4,7,10,14,18]，间隔 1,1,1,3,3,4,4。
+    """
+    num_steps = max(num_steps, num_goals)          # 每个 goal 至少要有一级可落
+    k = np.arange(1, num_goals + 1) / num_goals
+    idx = np.maximum(np.round(num_steps * k ** power).astype(int), 1)
+    for i in range(1, num_goals):                  # 强制严格递增，避免重合的 goal
+        idx[i] = max(idx[i], idx[i - 1] + 1)
+    idx[-1] = num_steps
+    for i in range(num_goals - 2, -1, -1):         # 反向再收一遍，防止越过末级
+        idx[i] = min(idx[i], idx[i + 1] - 1)
+    return idx
+
+
 def parkour_step_terrain(terrain, step_height=0.2, platform_len=2.5, num_stones=8,
+                         num_steps=None, goal_power=2.0,
                          x_range=(0.2, 0.4), y_range=(-0.15, 0.15),
                          half_valid_width=(0.45, 0.5), pad_width=0.1, pad_height=0.5,
                          outside_margin=None, rng=None):
@@ -114,7 +137,14 @@ def parkour_step_terrain(terrain, step_height=0.2, platform_len=2.5, num_stones=
        台阶再爬回来，本身就亏，所以外面保持 0 就够了。下楼时通道沉到 0 以下，那块
        0 高度低地反而变成【比通道还高的平台】——机器人爬出去沿平坦的边沿一路走到
        终点，goal 奖励照拿不误，绕行从"亏"变成"赚"。所以下楼时传 outside_margin，
-       把通道外压到最深一级台阶之下，离开通道就是掉坑。
+       让通道外【沿 x 跟着通道一起降】，始终只比同一 x 处的通道低这么多。
+       不用"一整块平底深坑"：18 级下降到 -3.3m 时，那种坑在刚出发处就是 3.7m 自由
+       落体，早期策略会大量摔死、接触力惩罚和终止统计全被这一下打乱。平行下沉的沟
+       靠奖励而不是靠摔死来压制绕行——通道宽 1.4~1.6m，走到外面就是 |dy|>0.7m，
+       超过 goal_pass_lateral_tol(0.5m)，goal 永远不计数、指针原地卡住。
+
+    num_steps 与 num_stones(=goal 数)解耦：见 step_goal_indices。默认 num_steps 等于
+    num_stones，即退化成"一级一个 goal"的旧行为。
 
     返回 goals: (num_stones+2, 2)，米，相对本块地形左下角；goals[0] 在起步平台上。
     """
@@ -132,23 +162,33 @@ def parkour_step_terrain(terrain, step_height=0.2, platform_len=2.5, num_stones=
     lane[:plat, :] = True                                # 起步平台整幅都算通道
     sh = int(step_height / vs)
 
+    n_steps = int(num_steps or num_stones)
+    goal_at = step_goal_indices(n_steps, num_stones, goal_power)  # 1-based 台阶序号
+    slot = {int(s): gi for gi, s in enumerate(goal_at)}
+
     dis_x = plat
     cur_h = 0
-    for k in range(num_stones):
+    last_center = goals[0]
+    for k in range(1, n_steps + 1):
         run = int(rng.uniform(*x_range) / hs)            # 每级台阶的踏面长度(0.2~0.4m)
         rand_y = int(rng.uniform(*y_range) / hs)
         hw = int(rng.uniform(*half_valid_width) / hs)    # 该级的通道半宽
         x0, x1 = dis_x, min(dis_x + run, nx)
         if x0 >= nx:
-            goals[k + 1] = goals[k]
-            continue
+            break
         cur_h += sh
         y0 = max(0, mid_y + rand_y - hw)
         y1 = min(ny, mid_y + rand_y + hw)
         terrain.height_field_raw[x0:x1, y0:y1] = cur_h   # 只抬中央条带
         lane[x0:x1, y0:y1] = True
-        goals[k + 1] = [((x0 + x1) * 0.5) * hs, (mid_y + rand_y) * hs]
+        last_center = [((x0 + x1) * 0.5) * hs, (mid_y + rand_y) * hs]
+        if k in slot:
+            goals[slot[k] + 1] = last_center
         dis_x = x1
+    # 地形塞不下时(不该发生)剩下的 goal 兜底压在最后一级上，宁可重合也不能是 0
+    for gi in range(num_stones):
+        if not goals[gi + 1].any():
+            goals[gi + 1] = last_center
 
     # 末端平台与最后一级同高，最后一个 goal 落在它上面
     hw = int(np.mean(half_valid_width) / hs)
@@ -158,9 +198,15 @@ def parkour_step_terrain(terrain, step_height=0.2, platform_len=2.5, num_stones=
     goals[-1] = [min(dis_x + int(0.5 / hs), nx - 1) * hs, mid_y * hs]
 
     if outside_margin is not None:
-        # 下楼梯专用：通道外压到最深一级之下，绕行=掉坑（见文档要点 3）
-        floor = int(terrain.height_field_raw[lane].min())
-        terrain.height_field_raw[~lane] = floor - int(outside_margin / vs)
+        # 下楼梯专用：通道外沿 x 跟着通道一起降，恒低 outside_margin（见文档要点 3）
+        hf = terrain.height_field_raw
+        masked = np.where(lane, hf.astype(np.int32), np.iinfo(np.int32).min)
+        prof = masked.max(axis=1)                        # 每个 x 处通道自身的高度
+        ok = prof > np.iinfo(np.int32).min
+        if ok.any():                                     # 兜底：平台/末端平台覆盖全部 x
+            prof = np.interp(np.arange(nx), np.flatnonzero(ok), prof[ok])
+            off = (prof - outside_margin / vs).astype(np.int32)
+            hf[:] = np.where(lane, hf, off[:, None]).astype(hf.dtype)
 
     _pad_edges(terrain, pad_width, pad_height)
     return goals
@@ -233,6 +279,11 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
     np.tile(np.linspace(...)) 退化成常数，踏石就是一块块平的板子，也就是通常说的
     "踏石"地形：练的是离散落脚点的选择与跨越，而不是踝部适应斜面。
 
+    【板子尺寸随难度缩小才是落脚点任务】0.9x1.0m 是脚(0.20x0.10m)面积的 45 倍，站
+    哪儿都行，那练的其实只是"跨过 0.1~0.4m 的缝"。缩到 0.45x0.50m 时单脚周围只剩
+    ±0.125/±0.200m 余量，才真的要挑落脚点。再小就撞地形分辨率了：horizontal_scale
+    =0.1m，0.25m 的梅花桩只有 2x2 个格子，高度图根本表达不出桩子的边。
+
     整块地形是深 pit_depth 的坑，只有踏石和首尾平台是实的；踏石沿 y 交替偏置
     ±y_range，所以必须左右换脚而不能一条直线走过去。
 
@@ -247,8 +298,11 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
     goals = np.zeros((num_stones + 2, 2))
 
     plat = int(platform_len / hs)
-    sl = max(1, int(stone_len / hs))
-    hw = max(1, int(stone_width / hs / 2))
+    # 【必须 round 而不是 int】板子尺寸本来就被 horizontal_scale=0.1m 量化，再用截断
+    # 就是二次损失：0.55m 宽先 /2 截成 2 格、再 x2 变成 0.40m，比配置值少了 27%，
+    # 而这一项恰恰是随难度收紧的落脚余量，误差直接吃掉一整档课程。
+    sl = max(1, int(round(stone_len / hs)))
+    wc = max(2, int(round(stone_width / hs)))            # 板宽(格)
     terrain.height_field_raw[:plat, :] = 0
     goals[0] = [max(plat - 1, 0) * hs, mid_y * hs]
 
@@ -258,7 +312,8 @@ def parkour_stone_terrain(terrain, num_stones=8, platform_len=2.5, stone_len=0.9
         dis_x += int(rng.uniform(*gap_range) / hs)
         x0, x1 = min(dis_x, nx - 1), min(dis_x + sl, nx)
         cy = mid_y + (1 if side else -1) * int(rng.uniform(*y_range) / hs)
-        terrain.height_field_raw[x0:x1, max(0, cy - hw):min(ny, cy + hw)] = 0
+        y0 = max(0, cy - wc // 2)
+        terrain.height_field_raw[x0:x1, y0:min(ny, y0 + wc)] = 0
         goals[k + 1] = [((x0 + x1) * 0.5) * hs, cy * hs]
         dis_x = x1
         side = 1 - side
@@ -531,7 +586,9 @@ class ParkourTerrain(HumanoidTerrain):
         step_kw = dict(x_range=tuple(getattr(c, 'parkour_x_range', (0.2, 0.4))),
                        y_range=tuple(getattr(c, 'parkour_y_range', (-0.15, 0.15))),
                        half_valid_width=tuple(getattr(c, 'parkour_half_valid_width',
-                                                      (0.45, 0.5))))
+                                                      (0.45, 0.5))),
+                       num_steps=getattr(c, 'parkour_step_count', None),
+                       goal_power=getattr(c, 'parkour_step_goal_power', 2.0))
 
         if choice < p[0]:                                   # 0 上台阶
             self._pending_goals = parkour_step_terrain(
@@ -556,10 +613,13 @@ class ParkourTerrain(HumanoidTerrain):
                 **common)
         else:                                               # 4 踏石
             g_lo, g_hi = getattr(c, 'parkour_stone_gap_range', [0.1, 0.4])
+            # 板子随难度缩小：从"站哪儿都行"退化到真正要挑落脚点
+            l_lo, l_hi = getattr(c, 'parkour_stone_len_range', [0.9, 0.45])
+            w_lo, w_hi = getattr(c, 'parkour_stone_width_range', [1.0, 0.5])
             self._pending_goals = parkour_stone_terrain(
                 terrain,
-                stone_len=getattr(c, 'parkour_stone_len', 0.9),
-                stone_width=getattr(c, 'parkour_stone_width', 1.0),
+                stone_len=l_lo + difficulty * (l_hi - l_lo),
+                stone_width=w_lo + difficulty * (w_hi - w_lo),
                 gap_range=(g_lo, g_lo + difficulty * (g_hi - g_lo)),
                 y_range=tuple(getattr(c, 'parkour_stone_y_range', (0.2, 0.4))),
                 pit_depth=getattr(c, 'parkour_stone_pit_depth', 0.5),
@@ -612,9 +672,9 @@ class ParkourTerrain(HumanoidTerrain):
         if len(p) > 3 and (p[2] > 0 or p[3] > 0):
             spacing.append(float(getattr(c, 'parkour_hurdle_x_range', (1.2, 1.8))[0]) / 2)
         if len(p) > 4 and p[4] > 0:
-            # 首块踏石离起步平台最近：gap + 半块板长
+            # 首块踏石离起步平台最近：gap + 半块板长(取最难那档的最小板长)
             spacing.append(float(getattr(c, 'parkour_stone_gap_range', (0.1, 0.4))[0])
-                           + float(getattr(c, 'parkour_stone_len', 0.9)) / 2)
+                           + min(getattr(c, 'parkour_stone_len_range', (0.9, 0.45))) / 2)
         return min(spacing) if spacing else 0.0
 
     def add_terrain_to_map(self, terrain, row, col):
