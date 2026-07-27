@@ -90,6 +90,24 @@ class N2ParkourCfg(N2PerceptiveCfg):
         parkour_goals_to_level_up = 5
         parkour_goals_to_level_down = 1
 
+    class asset(N2PerceptiveCfg.asset):
+        # 【开启自碰撞】这个值是直接传给 create_actor 的碰撞过滤掩码(legged_robot.py:894)，
+        # 非 0 = 关闭自碰撞。上游 legged_gym 默认 1，本仓库此前一路继承下来。
+        #
+        # 后果是实测出来的、不是推的：关闭自碰撞时两条腿在 Isaac 里可以互相穿过去，
+        # 代价为零，策略于是学出交叉腿步态。搬到 MuJoCo(MJCF 全量自碰撞)后 32.9% 的
+        # 物理步存在腿-腿接触、峰值 4945N(15 倍自重)，8/8 轨迹全摔；把 MuJoCo 的自碰撞
+        # 关掉则 8/8 全部登顶 20 级——单变量消融，因果明确。
+        #
+        # 注意 _reward_collision 读的是 contact_forces[penalised_contact_indices]，
+        # 自碰撞关闭时腿-腿接触【根本不进这个张量】，所以 collision=-1.0 这一项一直在
+        # 空转(实测 0727_13-52-12_ 末段 rew_collision = -0.0035，全程 max 恰好 0.0000)。
+        # 打开之后它自动开始生效，不需要新写奖励函数。
+        #
+        # 开训前已验证：默认站立姿态下 hip/knee 伪接触 0.00%、峰值 0.0N，凸包与
+        # thickness=0.01 的外扩不会造成静态自穿透；步态中接触率 0.8% -> 21.4%。
+        self_collisions = 0
+
     class commands(N2PerceptiveCfg.commands):
         # 本任务整体只发前进指令，不需要按地形列区分。
         stairs_forward_only = False

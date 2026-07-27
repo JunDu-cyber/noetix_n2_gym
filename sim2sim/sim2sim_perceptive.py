@@ -229,6 +229,13 @@ def run_mujoco(cfg):
         # legged_robot._draw_debug_vis (terrain.debug_viz) in Isaac Gym.
         debug_viz = bool(config.get("debug_viz", True))
 
+        # Isaac 在 step() 里对观测和动作各做一次裁剪(legged_robot.py:73/90，阈值来自
+        # normalization.clip_observations / clip_actions)。sim2sim 此前没有，策略输出
+        # 实测在 Isaac 里到过 29.8、MuJoCo 里到过 18.8，确实会触发。
+        # 实测对爬楼成功率影响为零，补上是为了对齐语义而非提性能。
+        clip_obs = float(config.get("clip_observations", 18.))
+        clip_act = float(config.get("clip_actions", 18.))
+
     model = mujoco.MjModel.from_xml_path(xml_path)
     model.opt.timestep = simulation_dt
     data = mujoco.MjData(model)
@@ -299,9 +306,12 @@ def run_mujoco(cfg):
             model_input = np.zeros([1, num_obs], dtype=np.float32)
             for i in range(frame_stack):
                 model_input[0, i * num_single_obs : (i + 1) * num_single_obs] = hist_obs[i][0, :]
+            # Isaac 裁的是拼好的 obs_buf(不是历史里的单帧)，逐元素裁剪所以等价
+            np.clip(model_input, -clip_obs, clip_obs, out=model_input)
             policy_input = torch.tensor(model_input)
 
-            action[:] = policy(policy_input)[0].detach().numpy()
+            # 裁剪后的动作既用于 target_q，也是下一帧观测里的 actions 项——与 Isaac 一致
+            action[:] = np.clip(policy(policy_input)[0].detach().numpy(), -clip_act, clip_act)
 
             target_q = (action * action_scale) + defaut_dof_pos
 

@@ -52,6 +52,12 @@ measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 terrain_horizontal_scale: 0.1
 terrain_vertical_scale: 0.005
 
+# 观测/动作裁剪，【必须与训练侧 normalization.clip_observations / clip_actions 一致】。
+# Isaac 在 step() 里对拼好的 obs_buf 和策略输出各裁一次(legged_robot.py:73/90)；
+# 裁剪后的动作还会回灌进下一帧观测的 actions 项，所以两边都要裁。
+clip_observations: 18.0
+clip_actions: 18.0
+
 cmd_init: [0, 0, 0]
 
 # Draw the height-scan grid (yellow spheres) in the MuJoCo viewer, matching
@@ -75,6 +81,11 @@ goal_count: 20
 # 训练侧同样的耦合由 N2ParkourEnv._check_goal_reach_consistency 强制。
 # 原来写 0.5 而 goal_spacing 只有 0.25，正好踩中；训练侧早已降到 0.15，这里漏了。
 goal_reach_dist: 0.15
+
+# 越过 goal 但没进到达圈时的横向容差(m)，对应 N2ParkourCfg.rewards.goal_pass_lateral_tol。
+# 只影响 waypoints 模式：机器人擦过 goal 而没进圈时，靠这个条件把指针推下去，
+# 否则 to_goal 掉头指向后方、Δψ 变成 ~180°，策略会掉头往回走。
+goal_pass_lateral_tol: 0.5
 
 # goal 模式：
 #   waypoints —— 用上面 goal_first_x/spacing/count 生成的固定路点（可复现的爬楼测试）
