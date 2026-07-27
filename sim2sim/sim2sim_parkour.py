@@ -30,7 +30,7 @@ import yaml
 # 复用 perceptive 侧已经调通的实现：观测提取、PD、高度扫描射线、键盘指令
 from sim2sim_perceptive import (
     cmd, get_obs, pd_control, init_height_points,
-    terrain_height_at, get_height_scan, get_height_points_world,
+    TerrainHF, get_height_scan, get_height_points_world,
 )
 
 
@@ -75,17 +75,17 @@ class Carrot:
             print("[carrot] offset=(%+.2f, %+.2f) 世界系  |offset|=%.2f m"
                   % (self.offset[0], self.offset[1], np.linalg.norm(self.offset)))
 
-    def update(self, base_xy, yaw, reach, model, data):
+    def update(self, base_xy, yaw, reach, hf):
         """返回胡萝卜的世界坐标 (x, y, z)。reach 参数保留只为签名统一，此模式不用。"""
         if self.offset is None:
             self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
         self._apply(yaw)
         pos = base_xy + self.offset
-        z = terrain_height_at(model, data, pos[None, :])[0]
+        z = hf.sample(pos[None, :])[0]
         return np.array([pos[0], pos[1], z])
 
 
-def build_goals(model, data, start_xy, cfg):
+def build_goals(hf, start_xy, cfg):
     """生成 goal 路点。
 
     优先用 yaml 里显式给的 goals（世界坐标 [[x,y],...]）；没有就沿 +x 自动铺：
@@ -97,7 +97,7 @@ def build_goals(model, data, start_xy, cfg):
     if explicit:
         pts = np.array(explicit, dtype=np.float64)
         if pts.shape[1] == 2:                       # 只给了 xy，z 用射线补
-            z = terrain_height_at(model, data, pts)
+            z = hf.sample(pts)
             pts = np.concatenate([pts, z[:, None]], axis=1)
         return pts
 
@@ -106,7 +106,7 @@ def build_goals(model, data, start_xy, cfg):
     count = int(cfg.get("goal_count", 20))
     xs = first + spacing * np.arange(count)
     ys = np.full_like(xs, start_xy[1])
-    z = terrain_height_at(model, data, np.stack([xs, ys], axis=-1))
+    z = hf.sample(np.stack([xs, ys], axis=-1))
     return np.stack([xs, ys, z], axis=-1)
 
 
@@ -159,6 +159,10 @@ def run_mujoco(cfg_name, command, carrot=None):
     default_dof_pos = default_angles
     data.qpos[7:] = default_dof_pos
     mujoco.mj_step(model, data)
+    # 静态地形高度图：一次性建好，之后每步只查数组(见 TerrainHF)
+    hf = TerrainHF(model, data,
+                   horizontal_scale=config.get('terrain_horizontal_scale', 0.1),
+                   vertical_scale=config.get('terrain_vertical_scale', 0.005))
 
     if goal_mode == "carrot":
         goals = None
@@ -166,7 +170,7 @@ def run_mujoco(cfg_name, command, carrot=None):
         print("[parkour] goal_mode=carrot —— 用方向键牵引目标点")
         print("          <-/->  左右挪   ^/v  前后挪   Home/End  调 lookahead   Insert/F1  对齐正前方")
     else:
-        goals = build_goals(model, data, data.qpos[:2].copy(), config)
+        goals = build_goals(hf, data.qpos[:2].copy(), config)
         cur_goal = 0
         print(f"[parkour] goal_mode=waypoints —— {len(goals)} 个路点，x 从 {goals[0,0]:.2f} 到 {goals[-1,0]:.2f} m")
     print(f"[parkour] 到达半径 {goal_reach_dist} m")
@@ -188,7 +192,7 @@ def run_mujoco(cfg_name, command, carrot=None):
             # 自身偏航（与 get_height_scan 里一致：仅取 yaw 分量）
             yaw = 2.0 * math.atan2(quat[2], quat[3])
             if goal_mode == "carrot":
-                cur_xyz = carrot.update(base_xyz[:2].copy(), yaw, goal_reach_dist, model, data)
+                cur_xyz = carrot.update(base_xyz[:2].copy(), yaw, goal_reach_dist, hf)
                 to_goal = cur_xyz[:2] - base_xyz[:2]
             else:
                 # ---- goal 推进：复刻 N2ParkourEnv._update_goals ----
@@ -221,12 +225,12 @@ def run_mujoco(cfg_name, command, carrot=None):
             obs[0, 9 + num_actions * 3]     = math.cos(dpsi)
             obs[0, 9 + num_actions * 3 + 1] = math.sin(dpsi)
             obs[0, 9 + num_actions * 3 + 2:] = get_height_scan(
-                model, data, base_xyz, quat, height_points,
+                hf, base_xyz, quat, height_points,
                 base_height_offset, height_clip, height_measurements_scale)
 
             if debug_viz:
                 height_marker_world[:] = get_height_points_world(
-                    model, data, base_xyz, quat, height_points)
+                    hf, base_xyz, quat, height_points)
 
             hist_obs.append(obs)
             model_input = np.zeros([1, num_obs], dtype=np.float32)
