@@ -70,7 +70,7 @@ class N2ParkourCfg(N2PerceptiveCfg):
 
         class scales(N2PerceptiveCfg.rewards.scales):
 
-            tracking_goal_vel = 4.0
+            tracking_goal_vel = 3.5
             tracking_yaw = 0.5          # EP: tracking_yaw = 0.5
             goal_reached = 0.0          # 非 EP 项，默认关闭
 
