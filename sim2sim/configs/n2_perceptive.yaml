@@ -51,6 +51,12 @@ measured_points_y: [-0.4, -0.3, -0.2, -0.1, 0.1, 0.2, 0.3, 0.4]
 terrain_horizontal_scale: 0.1
 terrain_vertical_scale: 0.005
 
+# 观测/动作裁剪，【必须与训练侧 normalization.clip_observations / clip_actions 一致】。
+# Isaac 在 step() 里对拼好的 obs_buf 和策略输出各裁一次(legged_robot.py:73/90)；
+# 裁剪后的动作还会回灌进下一帧观测的 actions 项，所以两边都要裁。
+clip_observations: 18.0
+clip_actions: 18.0
+
 cmd_init: [0, 0, 0]
 
 # Draw the height-scan grid (yellow spheres) in the MuJoCo viewer, matching

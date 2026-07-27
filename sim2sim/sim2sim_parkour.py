@@ -138,7 +138,13 @@ def run_mujoco(cfg_name, command, carrot=None):
     measured_points_x = config["measured_points_x"]
     measured_points_y = config["measured_points_y"]
     goal_reach_dist = float(config.get("goal_reach_dist", 0.5))
+    # 越过 goal 但没进到达圈时的横向容差，对应 N2ParkourCfg.rewards.goal_pass_lateral_tol。
+    # 此前这个名字在下面被引用却从未定义，waypoints 模式一进那行就 NameError。
+    goal_pass_lateral_tol = float(config.get("goal_pass_lateral_tol", 0.5))
     goal_mode = config.get("goal_mode", "waypoints")   # waypoints | carrot
+    # 与 Isaac step() 的 normalization.clip_observations / clip_actions 对齐
+    clip_obs = float(config.get("clip_observations", 18.))
+    clip_act = float(config.get("clip_actions", 18.))
     debug_viz = bool(config.get("debug_viz", True))
     tau_limit = np.array(config["tau_limit"], dtype=np.float32) if "tau_limit" in config else None
 
@@ -236,7 +242,9 @@ def run_mujoco(cfg_name, command, carrot=None):
             model_input = np.zeros([1, num_obs], dtype=np.float32)
             for i in range(frame_stack):
                 model_input[0, i * num_single_obs:(i + 1) * num_single_obs] = hist_obs[i][0, :]
-            action[:] = policy(torch.tensor(model_input))[0].detach().numpy()
+            np.clip(model_input, -clip_obs, clip_obs, out=model_input)
+            action[:] = np.clip(policy(torch.tensor(model_input))[0].detach().numpy(),
+                                -clip_act, clip_act)
             target_q = action * action_scale + default_dof_pos
 
             if step % 500 == 0:
