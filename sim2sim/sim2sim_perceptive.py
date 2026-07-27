@@ -8,30 +8,86 @@ from collections import deque
 from scipy.spatial.transform import Rotation as R
 from humanoid import LEGGED_GYM_ROOT_DIR
 import torch
-from pynput.keyboard import Listener, Key
+import glfw
 import yaml
 
 import matplotlib.pyplot as plt
 
+# 只屏蔽真正的修饰键，不含 CapsLock/NumLock：GLFW 默认不上报 lock 位
+# (GLFW_LOCK_KEY_MODS 默认关闭)，但显式屏蔽掉更稳妥。
+_MOD_MASK = glfw.MOD_SHIFT | glfw.MOD_CONTROL | glfw.MOD_ALT | glfw.MOD_SUPER
+
+
+def install_key_handler(viewer, keymap):
+    """把按键接管到 viewer 自己的 GLFW 窗口回调上，取代 pynput 全局钩子。
+
+    非用 GLFW 不可的原因：mujoco_viewer 自己就绑了一大批键，其中
+    RIGHT -> `_advance_by_one_step=True; _paused=True`（callbacks.py:56-58，
+    且 _paused 初值是 False 不是 None，所以这条分支是活的）。pynput 是【操作系统
+    级】全局钩子，按 → 时两边同时收到：胡萝卜挪一格，同时仿真被按进单步暂停。
+    换成窗口回调后我们能在 viewer 之前把键吃掉，冲突从根上消失。
+    顺带解决 pynput 的另外两个毛病：焦点在终端上打字也会触发；需要 X11 辅助功能权限。
+
+    两个容易踩的实现细节：
+      1) 自己的键【按下和抬起都要吞】。mujoco_viewer._key_callback 是在
+         action==RELEASE 时才动作的(callbacks.py:41)，只吞 PRESS 的话抬手瞬间
+         它照样触发。
+      2) 只在【无修饰键】时接管，否则 Ctrl+S(存相机位姿) 这类组合会被误吃。
+
+    keymap: {glfw 键码: 无参回调}。未接管的键原样转给 viewer。
+    """
+    window = getattr(viewer, 'window', None)
+    if window is None:                      # offscreen 模式没有窗口
+        print('[keys] viewer 无窗口(offscreen)，键盘控制已禁用')
+        return False
+    prev = viewer._key_callback
+
+    def _cb(win, key, scancode, action, mods):
+        if key in keymap and (mods & _MOD_MASK) == 0:
+            if action in (glfw.PRESS, glfw.REPEAT):
+                keymap[key]()
+            return
+        prev(win, key, scancode, action, mods)
+
+    glfw.set_key_callback(window, _cb)
+    return True
+
+
 class cmd:
+    """速度指令 (vx, vy, wz)，方向键 + 小键盘调节。"""
+
+    KEYMAP_HELP = ("[keys] ↑/↓ vx±0.1   ←/→ vy±0.1   Insert/Delete wz±0.1   F1 归零\n"
+                   "       小键盘 8/2、4/6、+/-、0 同上；Home/End 是 vy 的旧别名\n"
+                   "       其余按键(SPACE 暂停、W/S/D/T/C/J...)仍归 viewer")
+
     def __init__(self):
-        self.cmd = np.array([0., 0., 0.],dtype=np.float32)
-    def cmd_swtich(self, key_input):
-        if key_input == Key.up:
-            self.cmd[0] += 0.1
-        elif key_input == Key.down:
-            self.cmd[0] -= 0.1
-        elif key_input == Key.home:
-            self.cmd[1] += 0.1
-        elif key_input == Key.end:
-            self.cmd[1] -= 0.1
-        elif key_input == Key.insert:
-            self.cmd[2] += 0.1
-        elif key_input == Key.delete:
-            self.cmd[2] -= 0.1
-        elif key_input == Key.f1:
-            self.cmd[:] = 0.
-        print(f"Moved to ({self.cmd[0]}, {self.cmd[1]}, {self.cmd[2]})")
+        self.cmd = np.array([0., 0., 0.], dtype=np.float32)
+
+    def _bump(self, i, d):
+        def f():
+            self.cmd[i] += d
+            print("cmd = (%+.2f, %+.2f, %+.2f)" % tuple(self.cmd))
+        return f
+
+    def _zero(self):
+        self.cmd[:] = 0.
+        print("cmd = (%+.2f, %+.2f, %+.2f)" % tuple(self.cmd))
+
+    def glfw_keymap(self):
+        vx_up, vx_dn = self._bump(0, +0.1), self._bump(0, -0.1)
+        vy_up, vy_dn = self._bump(1, +0.1), self._bump(1, -0.1)
+        wz_up, wz_dn = self._bump(2, +0.1), self._bump(2, -0.1)
+        return {
+            glfw.KEY_UP: vx_up,       glfw.KEY_DOWN: vx_dn,
+            glfw.KEY_LEFT: vy_up,     glfw.KEY_RIGHT: vy_dn,
+            glfw.KEY_HOME: vy_up,     glfw.KEY_END: vy_dn,      # 旧键位，保留
+            glfw.KEY_INSERT: wz_up,   glfw.KEY_DELETE: wz_dn,
+            glfw.KEY_F1: self._zero,
+            glfw.KEY_KP_8: vx_up,     glfw.KEY_KP_2: vx_dn,
+            glfw.KEY_KP_4: vy_up,     glfw.KEY_KP_6: vy_dn,
+            glfw.KEY_KP_ADD: wz_up,   glfw.KEY_KP_SUBTRACT: wz_dn,
+            glfw.KEY_KP_0: self._zero,
+        }
 
 def get_obs(data):
     '''Extracts an observation from the mujoco data structure
@@ -191,6 +247,8 @@ def run_mujoco(cfg):
 
     mujoco.mj_step(model, data)
     viewer = mujoco_viewer.MujocoViewer(model, data)
+    if install_key_handler(viewer, command.glfw_keymap()):
+        print(cmd.KEYMAP_HELP)
 
     target_q = np.zeros((num_actions), dtype=np.double)
     action = np.zeros((num_actions), dtype=np.double)
@@ -304,7 +362,6 @@ if __name__ == '__main__':
         num_single_obs = config["num_single_obs"]
         frame_stack = config["frame_stack"]
 
+    # 键盘接管发生在 run_mujoco 里(必须等 viewer 建出来才有 GLFW 窗口)
     command = cmd()
-    listener = Listener(on_press=command.cmd_swtich)
-    listener.start()
     run_mujoco(config_file)
