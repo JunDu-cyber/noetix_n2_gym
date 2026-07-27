@@ -24,10 +24,10 @@ from tqdm import tqdm
 from collections import deque
 from humanoid import LEGGED_GYM_ROOT_DIR
 import torch
-from pynput.keyboard import Listener, Key
+import glfw
 import yaml
 
-# 复用 perceptive 侧已经调通的实现：观测提取、PD、高度扫描射线、键盘指令
+# 复用 perceptive 侧已经调通的实现：观测提取、PD、高度扫描射线、键盘接管
 from sim2sim_perceptive import (
     cmd, get_obs, pd_control, init_height_points,
     terrain_height_at, get_height_scan, get_height_points_world,
@@ -42,32 +42,50 @@ class Carrot:
       Home/End   整体拉远 / 拉近（沿当前 offset 方向缩放）
       Insert/F1  把 offset 重置为"当前朝向正前方 lookahead 米"（只取一次 yaw，
                  此后就是世界系常量，不再跟着转）
+      小键盘 8/2、4/6、+/-、0 与上面一一对应
     """
+
+    KEYMAP_HELP = ("[keys] ↑/↓ 前后拉   ←/→ 左右转   Home/End 拉远/拉近   F1 对齐正前方\n"
+                   "       小键盘 8/2、4/6、+/-、0 同上\n"
+                   "       其余按键(SPACE 暂停、W/S/D/T/C/J...)仍归 viewer")
 
     def __init__(self, lookahead=1.5, step=0.15):
         self.offset = None          # 世界系 (dx, dy)，相对机器人当前位置
         self.lookahead = lookahead
         self.step = step
-        self._pending = []          # 待处理按键，避免回调线程直接改状态
+        # 动作先入队、在 update() 里统一处理：'align' 需要当帧的 yaw，
+        # 而按键回调发生在 glfw.poll_events() 里，拿不到最新的姿态。
+        self._pending = []
 
-    def on_press(self, key):
-        self._pending.append(key)
+    def glfw_keymap(self):
+        def push(a):
+            return lambda: self._pending.append(a)
+        return {
+            glfw.KEY_UP: push('x+'),       glfw.KEY_DOWN: push('x-'),
+            glfw.KEY_LEFT: push('y+'),     glfw.KEY_RIGHT: push('y-'),
+            glfw.KEY_HOME: push('far'),    glfw.KEY_END: push('near'),
+            glfw.KEY_INSERT: push('align'), glfw.KEY_F1: push('align'),
+            glfw.KEY_KP_8: push('x+'),     glfw.KEY_KP_2: push('x-'),
+            glfw.KEY_KP_4: push('y+'),     glfw.KEY_KP_6: push('y-'),
+            glfw.KEY_KP_ADD: push('far'),  glfw.KEY_KP_SUBTRACT: push('near'),
+            glfw.KEY_KP_0: push('align'),
+        }
 
     def _apply(self, yaw):
         while self._pending:
-            k = self._pending.pop(0)
+            a = self._pending.pop(0)
             if self.offset is None:
                 self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
-            if k == Key.left:      self.offset[1] += self.step
-            elif k == Key.right:   self.offset[1] -= self.step
-            elif k == Key.up:      self.offset[0] += self.step
-            elif k == Key.down:    self.offset[0] -= self.step
-            elif k in (Key.home, Key.end):
+            if a == 'y+':     self.offset[1] += self.step
+            elif a == 'y-':   self.offset[1] -= self.step
+            elif a == 'x+':   self.offset[0] += self.step
+            elif a == 'x-':   self.offset[0] -= self.step
+            elif a in ('far', 'near'):
                 n = np.linalg.norm(self.offset)
                 if n > 1e-6:
-                    scale = (n + (0.1 if k == Key.home else -0.1)) / n
+                    scale = (n + (0.1 if a == 'far' else -0.1)) / n
                     self.offset = self.offset * max(scale, 0.05)
-            elif k in (Key.insert, Key.f1):
+            elif a == 'align':
                 # 只在此刻取一次 yaw，之后 offset 就是世界系常量
                 self.offset = np.array([math.cos(yaw), math.sin(yaw)]) * self.lookahead
             else:
@@ -101,6 +119,9 @@ def build_goals(model, data, start_xy, cfg):
             pts = np.concatenate([pts, z[:, None]], axis=1)
         return pts
 
+    # 【多地形后的注意事项】等间距只对台阶列成立。训练侧现在还有跨栏(间距 1.2~1.8m)
+    # 和踏石(间距 1.0~1.3m)，它们的路点不是等距的。测这两类时请在 yaml 里显式写
+    # goals: [[x,y],...]，或者直接用 goal_mode=carrot 手动牵。
     first = float(cfg.get("goal_first_x", 1.0))
     spacing = float(cfg.get("goal_spacing", 0.25))
     count = int(cfg.get("goal_count", 20))
@@ -172,6 +193,11 @@ def run_mujoco(cfg_name, command, carrot=None):
     print(f"[parkour] 到达半径 {goal_reach_dist} m")
 
     viewer = mujoco_viewer.MujocoViewer(model, data)
+    # carrot 模式牵目标点，waypoints 模式调速度指令；两者共用同一套 GLFW 接管
+    owner = carrot if goal_mode == "carrot" else command
+    if install_key_handler(viewer, owner.glfw_keymap()):
+        print(owner.KEYMAP_HELP)
+
     target_q = np.zeros(num_actions, dtype=np.double)
     action = np.zeros(num_actions, dtype=np.double)
     hist_obs = deque([np.zeros([1, num_single_obs], dtype=np.double) for _ in range(frame_stack)],
@@ -276,8 +302,5 @@ if __name__ == '__main__':
     if mode == "carrot":
         carrot = Carrot(lookahead=float(_cfg.get("carrot_lookahead", 1.5)),
                         step=float(_cfg.get("carrot_step", 0.15)))
-        listener = Listener(on_press=carrot.on_press)      # 方向键牵胡萝卜
-    else:
-        listener = Listener(on_press=command.cmd_swtich)   # 方向键调速度指令
-    listener.start()
+    # 键盘接管在 run_mujoco 里做：必须等 viewer 建出来才有 GLFW 窗口可挂
     run_mujoco(args.config_file, command, carrot)
