@@ -47,6 +47,31 @@ class N2ParkourEnv(N2PerceptiveEnv):
                 "goal_reach_dist=%.3f 必须 < 各地形类型的最小 goal 间距 %.3f，"
                 "否则相邻 goal 落在到达半径内、指针连跳导致课程虚高" % (reach, gap))
 
+    def _reward_stumble(self):
+        """摆动脚撞到竖直面的惩罚：连续量 + 只算摆动相。
+
+        基类版本(legged_robot.py:1159)是二值判据 any(|Fxy| > 5|Fz|)，两个毛病：
+          1) 轻蹭和狠踢同价，梯度不带强度信息；
+          2) 它是【比值】判据，摆动脚只要分担了一点体重比值就不成立，会漏掉。
+        实测(model_999，上楼梯 lvl5)：触发率 2.61%，累计只占正奖励栈的 0.82%，
+        所以"加了 stumble 还是踢台阶"不是权重不够，是这一项根本没有分辨力。
+
+        阈值全部取自实测接触力分布(自重 327N)：
+          支撑相 Fz 中位数 207.6N、p90 381N；摆动相 Fz p90 只有 100.7N
+            -> stance_force=80N 能干净地把"还没承重的脚"分出来。
+          摆动相 Fxy p90=16.8N(正常噪声)、p99=265N(真撞上)
+            -> min_force=20N 滤掉噪声，ref_force=200N 做归一化。
+        归一化到单脚 [0,1]、两脚合计 [0,2]，与原来的二值量纲相当，所以 scale 不用重调；
+        同时天然封顶，不会像 world_progress 那次被单步尖峰把 PPO 的价值函数打飞。
+        """
+        c = self.cfg.rewards
+        f = self.contact_forces[:, self.feet_indices, :]
+        fxy = torch.norm(f[:, :, :2], dim=2)
+        fz = torch.abs(f[:, :, 2])
+        swing = fz < c.stumble_stance_force              # 脚还没真正承重
+        hit = ((fxy - c.stumble_min_force).clip(min=0.) / c.stumble_ref_force).clip(max=1.)
+        return torch.sum(hit * swing.float(), dim=1)
+
     def _check_spawn_clearance(self, max_drop=0.15, samples=64):
         """出生点抖动之后必须仍落在实地上。
 

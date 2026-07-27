@@ -136,6 +136,14 @@ class N2ParkourCfg(N2PerceptiveCfg):
 
         feet_air_time_stale = 1.0
 
+        # ---- _reward_stumble(N2ParkourEnv 重写为连续量)的三个阈值 ----
+        # 全部取自实测接触力分布(model_999，上楼梯 lvl5，自重 327N)：
+        #   支撑相 Fz 中位数 207.6N / p90 381N，摆动相 Fz p90 仅 100.7N
+        stumble_stance_force = 80.0     # Fz 低于此值才算"摆动中、还没承重"
+        #   摆动相 Fxy p90=16.8N 是正常噪声，p99=265N 才是真撞上
+        stumble_min_force = 20.0        # 噪声门限
+        stumble_ref_force = 200.0       # 归一化参考，使单脚原始值落在 [0,1]
+
         class scales(N2PerceptiveCfg.rewards.scales):
 
             tracking_goal_vel = 3.5
@@ -153,6 +161,14 @@ class N2ParkourCfg(N2PerceptiveCfg):
             # base 系速度跟踪降权：主目标已由 tracking_goal_vel 承担。
             tracking_lin_vel = 0.5
             tracking_ang_vel = 0.3
+
+            # 基类的 -2.0 是配二值判据的。改成连续量后大部分事件是轻蹭(p50 只有 0.177
+            # 而不是 1.0)，同 scale 下平均代价掉到原来的 0.34 倍——不调就等于把惩罚
+            # 悄悄削弱 3 倍。6.0 让平均代价与改动前持平(0.052 vs 0.050 每步)，
+            # 这样这一轮只改"形状"不改"强度"，能干净地看出分级本身有没有用。
+            # 单步最坏 2.0*6=12，但 only_positive_rewards 把每步总和钳在 0，钳不穿。
+            # 若仍然踢台阶，下一档往上调：每 +6 约多占正奖励栈 0.8%。
+            stumble = -6.0
 
 
 class N2ParkourCfgPPO(N2PerceptiveCfgPPO):
