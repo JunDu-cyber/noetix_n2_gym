@@ -35,16 +35,11 @@ class N2ParkourCfg(N2PerceptiveCfg):
         num_rows = 10
         num_cols = 10
 
-        # 【parkour 专属索引】与 HumanoidTerrain 那套 9 槽无关，含义见
+
         # ParkourTerrain.TYPES：[上台阶, 下台阶, 跨栏, 平地路点, 踏石]。
-        # 列数 10，所以每 0.1 恰好一列：上台阶 3 列(已验证过的主力)、下台阶 2、
-        # 跨栏 2、平地路点 2、踏石 1(唯一带坑的类型，先只给一条课程梯子)。
-        terrain_proportions = [0.3, 0.2, 0.2, 0.2, 0.1]
+        terrain_proportions = [0.3, 0.3, 0.2, 0.1, 0.1]
 
         # ---- 下台阶(索引 1) ----
-        # 通道外压到最深一级台阶再往下这么多(m)。必须有：上楼时通道高于外面的 0 高度
-        # 低地，绕行要先下再爬回来本身就亏；下楼时通道沉到 0 以下，那块低地反而成了
-        # 比通道更高的平台，爬出去沿边沿走到终点照样拿 goal 奖励，绕行由亏变赚。
         parkour_stepdown_outside_margin = 0.3
 
         # ---- 跨栏 / 平地路点(索引 2/3) ----
